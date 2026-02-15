@@ -271,11 +271,13 @@ IF = NGP / FTPace
 rTSS = (duration_seconds × NGP × IF) / (FTPace × 3600) × 100
 ```
 
-**TRIMP (heart-rate based, Coros-compatible):**
+**TRIMP (heart-rate based, per-second accumulation, Coros-compatible):**
 ```
-ΔHR = (avg_HR - resting_HR) / (max_HR - resting_HR)
-TRIMP = duration_min × ΔHR × 0.2445 × e^(3.411 × ΔHR)
+For each second t:
+  ΔHR(t) = (HR(t) - resting_HR) / (max_HR - resting_HR)
+  TRIMP += (1/60) × ΔHR(t) × 0.2445 × e^(3.411 × ΔHR(t))
 ```
+*Note: Per-second accumulation is critical for interval workouts. Using avg_HR underestimates TRIMP when HR swings widely.*
 
 Both are calculated; rTSS is primary for load tracking, TRIMP is shown for Coros comparison.
 
@@ -672,7 +674,7 @@ Every Claude call includes a **base system prompt** (cached via Anthropic's prom
 **Model selection per interaction type:**
 | Interaction | Model | Rationale |
 |-------------|-------|-----------|
-| Plan Generation | Sonnet / Opus | Complex multi-constraint reasoning, highest stakes |
+| Plan Generation | Sonnet | Complex reasoning with good cost/speed balance. Upgrade to Opus if quality insufficient |
 | Mesocycle Transition | Sonnet | Needs evaluation + generation |
 | Workout Analysis | Sonnet | Needs compliance reasoning, pattern detection |
 | Free-form Chat | Haiku | Fast, cheap, sufficient with good system prompt |
@@ -1053,14 +1055,14 @@ Final mesocycle before goal race (typically 2-3 weeks out)
 
 ## 9. Authentication & Accounts
 
-**MVP: Simple email-based auth.** No passwords — magic link or one-time code sent to email.
+**MVP: Email + password auth.** Simple registration and login. No email verification, no emails sent.
 
 - Single athlete per account (no multi-athlete support in MVP)
+- Passwords hashed with Argon2id
 - Session-based auth with secure HTTP-only cookies
 - No OAuth/social login in MVP (except Coros OAuth for API sync, which is a data connection, not a login method)
 - Account data is isolated in SQLite — each athlete's data is only accessible to them
-
-**Why no password:** Reduces friction for a fitness app where the user logs in infrequently (most interaction is post-workout). Magic links are simpler to implement and more secure than password + reset flows.
+- No email sending infrastructure required
 
 ---
 
