@@ -740,6 +740,7 @@ Before any feature work, set up the project skeleton.
 ## Development Notes for Agents
 
 ### Working on a Phase
+0. Generate detailed phase specific doc at `docs/phases/PHASE_N_*.md` which has details including completion requirements, tests based on the phase description in this doc, the rest of instructions in this list, the architecture doc, and the features doc. Be detailed about what completion requirements are.
 1. Read the phase-specific doc in `docs/phases/PHASE_N_*.md` (to be generated at phase start)
 2. Read `docs/ARCHITECTURE.md` for directory structure, DB schema, and API surface
 3. Read `docs/FEATURES.md` for the relevant features' technical requirements
@@ -748,7 +749,8 @@ Before any feature work, set up the project skeleton.
 6. Implement frontend changes — **invoke `/frontend-design` skill** before making any frontend design choices (layout, component structure, styling, responsive behavior, UX patterns)
 7. Write Playwright E2E tests — **invoke `/playwright` skill** when writing or modifying Playwright tests
 8. Run full test suite before marking complete
-9. Add documentation for testing and using all new code you added so next agent knows how to use
+9. Add documentation for testing and using all new code you added so next agent knows how to use. Update the README to say how you can try out the app given the current phase (you can remove instructions from previous phase if it is no longer relevant)
+10. Make a checklist of everything you plan to do and double check that you completed the checklist
 
 ### Required Skills
 - **`/frontend-design`**: MUST be invoked before making frontend design decisions — component layout, page structure, responsive breakpoints, color choices, spacing, UX flows, accessibility patterns. This ensures consistent, high-quality UI across all phases.

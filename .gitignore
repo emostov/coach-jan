@@ -1,0 +1,27 @@
+# Rust
+/target
+
+# Environment
+.env
+
+# Database
+data/coachjan.db
+data/coachjan.db-shm
+data/coachjan.db-wal
+
+# FIT files (user data)
+data/fit_files/*
+!data/fit_files/.gitkeep
+
+# Frontend
+frontend/node_modules
+frontend/dist
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
