@@ -32,8 +32,8 @@ CoachJan is an AI running coach built on Jan Olbrecht's training philosophy. It 
 
 ## Working on This Project
 
-- When doing research, spin up multiple agents do parrellelize research as much as possible
-- You have 3 key agents: software application developer, Jan Olbrecht the Running Coach who will use this, and code reviewer. When building features use all 3 agents or more
+- When doing research, spin up multiple agents do parallelize research as much as possible
+- You have 4 key agents: software application developer, Jan Olbrecht the Running Coach who will use this, code-explorer and code reviewer. When building features use all 4 agents or more
 - Whenever writing code that using LLM APIs, use an agent that is an expert in LLM API usage to create plan and to do code review
 - Whenever doing a task thats more then 2 steps, make a plan and a todo list
 - Ask questions whenever there is ambiguity

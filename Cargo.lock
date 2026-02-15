@@ -226,6 +226,7 @@ dependencies = [
  "dotenvy",
  "http-body-util",
  "nom",
+ "rand_core",
  "reqwest",
  "serde",
  "serde_json",

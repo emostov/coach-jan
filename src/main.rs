@@ -1,23 +1,9 @@
-mod config;
-mod error;
-
-use axum::{Router, routing::get, response::Html};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
-use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::config::Config;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: sqlx::SqlitePool,
-    pub config: Config,
-}
-
-async fn hello() -> Html<&'static str> {
-    Html("<h1>Hello from CoachJan</h1>")
-}
+use coachjan::{AppState, build_app};
+use coachjan::config::Config;
 
 #[tokio::main]
 async fn main() {
@@ -57,10 +43,7 @@ async fn main() {
         config: config.clone(),
     };
 
-    let app = Router::new()
-        .route("/", get(hello))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = build_app(state);
 
     let listener = tokio::net::TcpListener::bind(config.listen_addr())
         .await

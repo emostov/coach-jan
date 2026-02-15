@@ -740,7 +740,7 @@ Before any feature work, set up the project skeleton.
 ## Development Notes for Agents
 
 ### Working on a Phase
-0. Generate detailed phase specific doc at `docs/phases/PHASE_N_*.md` which has details including completion requirements, tests based on the phase description in this doc, the rest of instructions in this list, the architecture doc, and the features doc. Be detailed about what completion requirements are.
+0. Generate detailed phase specific doc at `docs/phases/PHASE_N_*.md` which has details including completion requirements, tests based on the phase description in this doc, the rest of instructions in this list, the architecture doc, and the features doc. Be detailed about what completion requirements are. Once this doc is generated use it to guide the session
 1. Read the phase-specific doc in `docs/phases/PHASE_N_*.md` (to be generated at phase start)
 2. Read `docs/ARCHITECTURE.md` for directory structure, DB schema, and API surface
 3. Read `docs/FEATURES.md` for the relevant features' technical requirements
