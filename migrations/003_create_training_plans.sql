@@ -34,8 +34,10 @@ CREATE TABLE planned_workouts (
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     scheduled_date TEXT NOT NULL,
     workout_type TEXT NOT NULL CHECK (workout_type IN (
-        'easy_run', 'long_run', 'long_run_progression', 'aerobic_development',
-        'tempo_run', 'vo2max_intervals', 'track_200m', 'track_400m', 'track_800m',
+        'easy_run', 'long_run', 'long_run_progression', 'long_run_moderate',
+        'aerobic_development', 'moderate_run', 'steady_run',
+        'tempo_run', 'vo2max_intervals', 'under_over',
+        'track_200m', 'track_400m', 'track_800m',
         'anaerobic_hills', 'anaerobic_flat', 'anaerobic_power',
         'race_specific', 'recovery_run', 'rest',
         'strength_precision', 'strength_performance', 'strength_power'

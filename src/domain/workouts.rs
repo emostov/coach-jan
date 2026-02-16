@@ -11,9 +11,13 @@ pub enum WorkoutType {
     EasyRun,
     LongRun,
     LongRunProgression,
+    LongRunModerate,
     AerobicDevelopment,
+    ModerateRun,
+    SteadyRun,
     TempoRun,
     Vo2maxIntervals,
+    UnderOver,
     Track200m,
     Track400m,
     Track800m,
@@ -34,9 +38,13 @@ impl WorkoutType {
             Self::EasyRun => "easy_run",
             Self::LongRun => "long_run",
             Self::LongRunProgression => "long_run_progression",
+            Self::LongRunModerate => "long_run_moderate",
             Self::AerobicDevelopment => "aerobic_development",
+            Self::ModerateRun => "moderate_run",
+            Self::SteadyRun => "steady_run",
             Self::TempoRun => "tempo_run",
             Self::Vo2maxIntervals => "vo2max_intervals",
+            Self::UnderOver => "under_over",
             Self::Track200m => "track_200m",
             Self::Track400m => "track_400m",
             Self::Track800m => "track_800m",
@@ -57,9 +65,13 @@ impl WorkoutType {
             "easy_run" => Some(Self::EasyRun),
             "long_run" => Some(Self::LongRun),
             "long_run_progression" => Some(Self::LongRunProgression),
+            "long_run_moderate" => Some(Self::LongRunModerate),
             "aerobic_development" => Some(Self::AerobicDevelopment),
+            "moderate_run" => Some(Self::ModerateRun),
+            "steady_run" => Some(Self::SteadyRun),
             "tempo_run" => Some(Self::TempoRun),
             "vo2max_intervals" => Some(Self::Vo2maxIntervals),
+            "under_over" => Some(Self::UnderOver),
             "track_200m" => Some(Self::Track200m),
             "track_400m" => Some(Self::Track400m),
             "track_800m" => Some(Self::Track800m),
@@ -81,9 +93,13 @@ impl WorkoutType {
             Self::EasyRun => "Easy Run",
             Self::LongRun => "Long Run",
             Self::LongRunProgression => "Long Run w/ Progression",
+            Self::LongRunModerate => "Long Run w/ Moderate Finish",
             Self::AerobicDevelopment => "Aerobic Development",
+            Self::ModerateRun => "Moderate Run",
+            Self::SteadyRun => "Steady Run",
             Self::TempoRun => "Tempo Run",
             Self::Vo2maxIntervals => "VO2max Intervals",
+            Self::UnderOver => "Under/Over Intervals",
             Self::Track200m => "Track 200m Repeats",
             Self::Track400m => "Track 400m Repeats",
             Self::Track800m => "Track 800m Repeats",
@@ -104,6 +120,7 @@ impl WorkoutType {
         matches!(
             self,
             Self::Vo2maxIntervals
+                | Self::UnderOver
                 | Self::Track200m
                 | Self::Track400m
                 | Self::Track800m
@@ -118,8 +135,9 @@ impl WorkoutType {
     /// All workout types.
     pub fn all() -> Vec<Self> {
         vec![
-            Self::EasyRun, Self::LongRun, Self::LongRunProgression,
-            Self::AerobicDevelopment, Self::TempoRun, Self::Vo2maxIntervals,
+            Self::EasyRun, Self::LongRun, Self::LongRunProgression, Self::LongRunModerate,
+            Self::AerobicDevelopment, Self::ModerateRun, Self::SteadyRun,
+            Self::TempoRun, Self::Vo2maxIntervals, Self::UnderOver,
             Self::Track200m, Self::Track400m, Self::Track800m,
             Self::AnaerobicHills, Self::AnaerobicFlat, Self::AnaerobicPower,
             Self::RaceSpecific, Self::RecoveryRun, Self::Rest,
@@ -130,8 +148,9 @@ impl WorkoutType {
     /// Running workout types only (have templates in the registry).
     pub fn all_running() -> Vec<Self> {
         vec![
-            Self::EasyRun, Self::LongRun, Self::LongRunProgression,
-            Self::AerobicDevelopment, Self::TempoRun, Self::Vo2maxIntervals,
+            Self::EasyRun, Self::LongRun, Self::LongRunProgression, Self::LongRunModerate,
+            Self::AerobicDevelopment, Self::ModerateRun, Self::SteadyRun,
+            Self::TempoRun, Self::Vo2maxIntervals, Self::UnderOver,
             Self::Track200m, Self::Track400m, Self::Track800m,
             Self::AnaerobicHills, Self::AnaerobicFlat, Self::AnaerobicPower,
             Self::RaceSpecific, Self::RecoveryRun,
@@ -278,6 +297,31 @@ impl WorkoutRegistry {
             ]),
         });
 
+        // Long Run with Moderate Finish: last 2-3 miles at Zone 3-4 (aerobic build)
+        templates.insert(WorkoutType::LongRunModerate, WorkoutTemplate {
+            workout_type: WorkoutType::LongRunModerate,
+            description: "Long run with last 2-3 miles at moderate effort (Zone 3-4)",
+            target_hr_zones: vec![1, 2, 3],
+            target_pace_zones: vec![1, 2, 3],
+            durations: HashMap::from([
+                (DurationCategory::Short, DurationParams {
+                    total_duration_min: 75,
+                    structure: "60 min easy @ Zone 1-2, then 15 min @ Zone 3 (moderate)",
+                    expected_tss_min: 65.0, expected_tss_max: 85.0,
+                }),
+                (DurationCategory::Medium, DurationParams {
+                    total_duration_min: 95,
+                    structure: "75 min easy @ Zone 1-2, then 20 min @ Zone 3 (moderate)",
+                    expected_tss_min: 90.0, expected_tss_max: 115.0,
+                }),
+                (DurationCategory::Long, DurationParams {
+                    total_duration_min: 120,
+                    structure: "95 min easy @ Zone 1-2, then 25 min @ Zone 3-4 (moderate-steady)",
+                    expected_tss_min: 115.0, expected_tss_max: 150.0,
+                }),
+            ]),
+        });
+
         // Aerobic Development
         templates.insert(WorkoutType::AerobicDevelopment, WorkoutTemplate {
             workout_type: WorkoutType::AerobicDevelopment,
@@ -299,6 +343,56 @@ impl WorkoutRegistry {
                     total_duration_min: 50,
                     structure: "45 min easy with 8x20s strides",
                     expected_tss_min: 50.0, expected_tss_max: 65.0,
+                }),
+            ]),
+        });
+
+        // Moderate Run: progressive easy run finishing last portion at Zone 3
+        templates.insert(WorkoutType::ModerateRun, WorkoutTemplate {
+            workout_type: WorkoutType::ModerateRun,
+            description: "Easy run with last portion at moderate effort (Zone 3)",
+            target_hr_zones: vec![2, 3],
+            target_pace_zones: vec![2, 3],
+            durations: HashMap::from([
+                (DurationCategory::Short, DurationParams {
+                    total_duration_min: 35,
+                    structure: "25 min easy @ Zone 2, then 10 min @ Zone 3",
+                    expected_tss_min: 30.0, expected_tss_max: 42.0,
+                }),
+                (DurationCategory::Medium, DurationParams {
+                    total_duration_min: 50,
+                    structure: "30 min easy @ Zone 2, then 20 min @ Zone 3",
+                    expected_tss_min: 48.0, expected_tss_max: 62.0,
+                }),
+                (DurationCategory::Long, DurationParams {
+                    total_duration_min: 60,
+                    structure: "35 min easy @ Zone 2, then 25 min @ Zone 3",
+                    expected_tss_min: 58.0, expected_tss_max: 75.0,
+                }),
+            ]),
+        });
+
+        // Steady Run: sustained moderate-hard effort at Zone 3-4
+        templates.insert(WorkoutType::SteadyRun, WorkoutTemplate {
+            workout_type: WorkoutType::SteadyRun,
+            description: "Sustained moderate-hard effort (Zone 3-4) — comfortably uncomfortable",
+            target_hr_zones: vec![3, 4],
+            target_pace_zones: vec![3, 4],
+            durations: HashMap::from([
+                (DurationCategory::Short, DurationParams {
+                    total_duration_min: 35,
+                    structure: "35 min sustained @ Zone 3-4",
+                    expected_tss_min: 42.0, expected_tss_max: 55.0,
+                }),
+                (DurationCategory::Medium, DurationParams {
+                    total_duration_min: 45,
+                    structure: "45 min sustained @ Zone 3-4",
+                    expected_tss_min: 55.0, expected_tss_max: 70.0,
+                }),
+                (DurationCategory::Long, DurationParams {
+                    total_duration_min: 55,
+                    structure: "55 min sustained @ Zone 3-4",
+                    expected_tss_min: 68.0, expected_tss_max: 85.0,
                 }),
             ]),
         });
@@ -349,6 +443,31 @@ impl WorkoutRegistry {
                     total_duration_min: 55,
                     structure: "10 min warmup + 6x3 min @ Zone 5 / 2.5 min jog + 10 min cooldown",
                     expected_tss_min: 75.0, expected_tss_max: 100.0,
+                }),
+            ]),
+        });
+
+        // Under/Over Intervals: alternating hard/easy (30/30, 60/60, under/over threshold)
+        templates.insert(WorkoutType::UnderOver, WorkoutTemplate {
+            workout_type: WorkoutType::UnderOver,
+            description: "Alternating fast/slow intervals (30/30s, 60/60s) at VO2max effort",
+            target_hr_zones: vec![4, 5, 6],
+            target_pace_zones: vec![4, 5],
+            durations: HashMap::from([
+                (DurationCategory::Short, DurationParams {
+                    total_duration_min: 40,
+                    structure: "10 min warmup + 15x30s hard Zone 5-6 / 30s easy Zone 2 + 10 min cooldown",
+                    expected_tss_min: 50.0, expected_tss_max: 65.0,
+                }),
+                (DurationCategory::Medium, DurationParams {
+                    total_duration_min: 50,
+                    structure: "10 min warmup + 20x30s hard Zone 5-6 / 30s easy Zone 2 + 10 min cooldown",
+                    expected_tss_min: 60.0, expected_tss_max: 80.0,
+                }),
+                (DurationCategory::Long, DurationParams {
+                    total_duration_min: 55,
+                    structure: "10 min warmup + 15x60s hard Zone 5 / 60s easy Zone 2 + 10 min cooldown",
+                    expected_tss_min: 70.0, expected_tss_max: 90.0,
                 }),
             ]),
         });
@@ -697,6 +816,7 @@ mod tests {
     #[test]
     fn is_intensity_session_correct() {
         assert!(WorkoutType::Vo2maxIntervals.is_intensity());
+        assert!(WorkoutType::UnderOver.is_intensity());
         assert!(WorkoutType::Track200m.is_intensity());
         assert!(WorkoutType::Track400m.is_intensity());
         assert!(WorkoutType::Track800m.is_intensity());
@@ -707,6 +827,9 @@ mod tests {
         assert!(WorkoutType::TempoRun.is_intensity());
         assert!(!WorkoutType::EasyRun.is_intensity());
         assert!(!WorkoutType::LongRun.is_intensity());
+        assert!(!WorkoutType::LongRunModerate.is_intensity());
+        assert!(!WorkoutType::ModerateRun.is_intensity());
+        assert!(!WorkoutType::SteadyRun.is_intensity());
         assert!(!WorkoutType::RecoveryRun.is_intensity());
         assert!(!WorkoutType::Rest.is_intensity());
     }
