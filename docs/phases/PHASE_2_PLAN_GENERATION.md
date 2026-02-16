@@ -12,7 +12,7 @@ An athlete with a profile and race goal can generate a full training plan. The p
 
 ### Backend
 - [x] Database migration for macrocycles, mesocycles, planned_workouts tables
-- [x] Workout registry with 33 workout types and 3 duration categories each
+- [x] Workout registry with 32 workout types and 3 duration categories each
 - [x] Plan validation rules (rest day, max intensity, volume increase, no duplicate dates, max one long run)
 - [x] Claude API client with retry logic and rate limit handling
 - [x] Tool schemas for macrocycle skeleton and mesocycle detail generation
@@ -88,7 +88,7 @@ An athlete with a profile and race goal can generate a full training plan. The p
 
 ---
 
-## Workout Types (33 total)
+## Workout Types (32 total)
 
 ### Easy/Aerobic (green)
 easy_run, recovery_run, long_run, long_run_progression, long_run_moderate, aerobic_development, moderate_run, shakeout_run, mixed_energy
