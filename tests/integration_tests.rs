@@ -46,7 +46,7 @@ async fn test_app() -> Router {
         anthropic_api_key: None,
     };
 
-    let state = AppState { db, config };
+    let state = AppState { db, config, claude_client: None };
     build_app(state)
 }
 

@@ -2,6 +2,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use std::sync::Arc;
+
 use coachjan::{AppState, build_app};
 use coachjan::config::Config;
 
@@ -38,9 +40,14 @@ async fn main() {
 
     tracing::info!("Database connected and migrations applied");
 
+    let claude_client = config.anthropic_api_key.as_ref().map(|key| {
+        Arc::new(coachjan::ai::client::ClaudeClient::new(key.clone()))
+    });
+
     let state = AppState {
         db,
         config: config.clone(),
+        claude_client,
     };
 
     let app = build_app(state);

@@ -6,6 +6,8 @@ pub mod domain;
 pub mod ai;
 pub mod error;
 
+use std::sync::Arc;
+
 use axum::routing::get;
 use axum::{Router, response::Html};
 use tower_http::trace::TraceLayer;
@@ -16,6 +18,7 @@ use crate::config::Config;
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub config: Config,
+    pub claude_client: Option<Arc<crate::ai::client::ClaudeClient>>,
 }
 
 async fn hello() -> Html<&'static str> {
@@ -28,6 +31,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/", get(hello))
         .nest("/api/auth", api::auth::router())
         .nest("/api/athlete", api::athletes::router())
+        .nest("/api/plan", api::plans::router())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
