@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod domain;
+pub mod ai;
 pub mod error;
 
 use axum::routing::get;
