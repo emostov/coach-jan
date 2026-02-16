@@ -94,9 +94,9 @@ const selectClass =
 // Coach Jan Avatar (reusable)
 // ────────────────────────────────────────────────────
 
-function CoachAvatar({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
-  const sizeClass = size === 'lg' ? 'w-16 h-16' : 'w-7 h-7';
-  const textClass = size === 'lg' ? 'text-2xl' : 'text-xs';
+function CoachAvatar({ size = 'sm' }: { size?: 'sm' | 'md' | 'lg' }) {
+  const sizeClass = size === 'lg' ? 'w-16 h-16' : size === 'md' ? 'w-10 h-10' : 'w-7 h-7';
+  const textClass = size === 'lg' ? 'text-2xl' : size === 'md' ? 'text-sm' : 'text-xs';
   return (
     <div className={`${sizeClass} rounded-full bg-forest flex items-center justify-center`}>
       <span className={`text-cream ${textClass} font-bold font-serif`}>J</span>
@@ -635,7 +635,6 @@ function StepSkeletonReview({
   skeleton: MacrocycleSkeleton;
   onConfirm: () => void;
 }) {
-  const navigate = useNavigate();
   const confirmPlan = useConfirmPlan();
   const [isConfirming, setIsConfirming] = useState(false);
 
@@ -644,7 +643,6 @@ function StepSkeletonReview({
     confirmPlan.mutate(skeleton, {
       onSuccess: () => {
         onConfirm();
-        navigate('/');
       },
       onError: () => {
         setIsConfirming(false);
@@ -706,8 +704,8 @@ function StepSkeletonReview({
         <div className="flex flex-col items-center py-4">
           <div className="relative mb-4">
             <div className="absolute inset-0 w-10 h-10 rounded-full bg-forest/20 animate-ping" />
-            <div className="relative w-10 h-10 rounded-full bg-forest flex items-center justify-center">
-              <span className="text-cream text-sm font-bold font-serif">J</span>
+            <div className="relative">
+              <CoachAvatar size="md" />
             </div>
           </div>
           <p className="text-sm text-charcoal font-medium">Generating your workouts...</p>
@@ -918,8 +916,10 @@ export default function Onboarding() {
         // Save race goal from response, transition to plan generation
         if (data.race_goal) {
           setRaceGoal(data.race_goal);
+          setStep(6);
+        } else {
+          setApiError('Profile created but no race goal found. Please try again.');
         }
-        setStep(6);
       },
       onError: (error) => setApiError(error.message),
     });
