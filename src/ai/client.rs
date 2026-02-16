@@ -139,15 +139,20 @@ pub enum ClaudeError {
 pub struct ClaudeClient {
     http: reqwest::Client,
     api_key: String,
+    base_url: String,
 }
 
 impl ClaudeClient {
     pub fn new(api_key: String) -> Self {
+        Self::new_with_base_url(api_key, "https://api.anthropic.com".to_string())
+    }
+
+    pub fn new_with_base_url(api_key: String, base_url: String) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
             .expect("Failed to build HTTP client");
-        Self { http, api_key }
+        Self { http, api_key, base_url }
     }
 
     pub async fn send(
@@ -172,7 +177,7 @@ impl ClaudeClient {
         loop {
             let result = self
                 .http
-                .post("https://api.anthropic.com/v1/messages")
+                .post(format!("{}/v1/messages", self.base_url))
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")

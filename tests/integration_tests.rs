@@ -3,6 +3,8 @@
 //! These tests exercise the full HTTP request/response cycle through the Axum
 //! router, using an in-memory SQLite database for isolation.
 
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
@@ -10,7 +12,10 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tower::ServiceExt;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use coachjan::ai::client::ClaudeClient;
 use coachjan::config::Config;
 use coachjan::{build_app, AppState};
 
@@ -731,4 +736,479 @@ async fn root_returns_hello() {
     let response = send_request(app, get_request("/")).await;
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+// ===========================================================================
+// Wiremock helpers
+// ===========================================================================
+
+/// Build an Axum app backed by a fresh in-memory SQLite database with a
+/// ClaudeClient pointing at the given wiremock server URL.
+async fn test_app_with_claude(mock_server_uri: &str) -> Router {
+    let connect_options = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true)
+        .pragma("foreign_keys", "ON");
+
+    let db = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options)
+        .await
+        .expect("Failed to create in-memory SQLite pool");
+
+    sqlx::migrate!("./migrations")
+        .run(&db)
+        .await
+        .expect("Failed to run migrations");
+
+    let client = ClaudeClient::new_with_base_url(
+        "test-api-key".to_string(),
+        mock_server_uri.to_string(),
+    );
+
+    let config = Config {
+        database_url: String::new(),
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        anthropic_api_key: Some("test-api-key".to_string()),
+    };
+
+    let state = AppState {
+        db,
+        config,
+        claude_client: Some(Arc::new(client)),
+    };
+    build_app(state)
+}
+
+/// Build a Claude API response wrapping a tool_use block.
+fn claude_tool_use_response(tool_name: &str, input: Value) -> Value {
+    json!({
+        "id": "msg_test_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{
+            "type": "tool_use",
+            "id": "toolu_test_123",
+            "name": tool_name,
+            "input": input
+        }],
+        "model": "claude-sonnet-4-5-20250929",
+        "stop_reason": "tool_use",
+        "usage": { "input_tokens": 100, "output_tokens": 200 }
+    })
+}
+
+/// Register user and create an athlete profile (with race goal), returning
+/// (app, session_id, race_goal_id).
+async fn setup_user_with_profile(app: Router) -> (Router, String, i64) {
+    let (app, session_id) =
+        register_user(app, "planner@example.com", "securepass123").await;
+
+    let profile_body = valid_profile_body();
+    let response = send_request(
+        app.clone(),
+        post_json_authed("/api/athlete/profile", &profile_body, &session_id),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let json = body_json(response).await;
+    let race_goal_id = json["race_goal"]["id"]
+        .as_i64()
+        .expect("race_goal should have an id");
+
+    (app, session_id, race_goal_id)
+}
+
+// ===========================================================================
+// Plan generation integration tests (with wiremock)
+// ===========================================================================
+
+#[tokio::test]
+async fn generate_plan_returns_macrocycle_skeleton() {
+    let mock_server = MockServer::start().await;
+
+    // Mock Claude to return a valid macrocycle skeleton
+    let skeleton_input = json!({
+        "target_ctl": 55.0,
+        "coach_message": "We'll build your aerobic engine first, then sharpen for race day.",
+        "mesocycles": [
+            {
+                "sequence_number": 1,
+                "phase": "capacity",
+                "focus": "aerobic_capacity",
+                "load_weeks": 3,
+                "recovery_weeks": 1,
+                "target_volume_km": 40.0
+            },
+            {
+                "sequence_number": 2,
+                "phase": "utilization",
+                "focus": "race_specific",
+                "load_weeks": 2,
+                "recovery_weeks": 1,
+                "target_volume_km": 45.0
+            }
+        ]
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(claude_tool_use_response(
+                    "generate_macrocycle_skeleton",
+                    skeleton_input,
+                )),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let app = test_app_with_claude(&mock_server.uri()).await;
+    let (app, session_id, race_goal_id) = setup_user_with_profile(app).await;
+
+    // POST /api/plan/generate
+    let generate_body = json!({ "race_goal_id": race_goal_id });
+    let response = send_request(
+        app,
+        post_json_authed("/api/plan/generate", &generate_body, &session_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let json = body_json(response).await;
+    assert_eq!(json["target_ctl"], 55.0);
+    assert!(json["coach_message"]
+        .as_str()
+        .unwrap()
+        .contains("aerobic engine"));
+    assert_eq!(json["mesocycles"].as_array().unwrap().len(), 2);
+    assert_eq!(json["mesocycles"][0]["phase"], "capacity");
+    assert_eq!(json["mesocycles"][1]["phase"], "utilization");
+}
+
+#[tokio::test]
+async fn full_plan_generation_and_confirm_flow() {
+    let mock_server = MockServer::start().await;
+
+    // We need to compute dates the same way the handler will so our mock
+    // mesocycle plan returns matching dates.
+    let today = chrono::Utc::now().date_naive();
+
+    // Mesocycle 1: 3 load + 1 recovery = 4 weeks
+    let meso1_start = today;
+    let _meso1_end = today + chrono::Duration::weeks(4) - chrono::Duration::days(1);
+
+    // Build one week of dates starting from meso1_start (a Monday-aligned week)
+    // We'll generate 4 weeks of dates for the mesocycle plan mock.
+    let mut weeks_json = Vec::new();
+    for week_num in 0..4u32 {
+        let week_start = meso1_start + chrono::Duration::weeks(week_num as i64);
+        let is_recovery = week_num == 3;
+        let week_type = if is_recovery { "recovery" } else { "load" };
+        let target_vol = if is_recovery { 25.0 } else { 40.0 };
+        let target_tss = if is_recovery { 150.0 } else { 250.0 };
+
+        let mut days = Vec::new();
+        // Day assignments for a valid week:
+        // Mon: easy_run, Tue: strength_power, Wed: tempo_run, Thu: rest,
+        // Fri: easy_run, Sat: long_run, Sun: recovery_run
+        let day_specs = if is_recovery {
+            vec![
+                ("easy_run", Some("short")),
+                ("rest", None),
+                ("easy_run", Some("short")),
+                ("rest", None),
+                ("easy_run", Some("short")),
+                ("recovery_run", Some("short")),
+                ("rest", None),
+            ]
+        } else {
+            vec![
+                ("easy_run", Some("medium")),
+                ("strength_power", None),
+                ("tempo_run", Some("medium")),
+                ("rest", None),
+                ("easy_run", Some("short")),
+                ("long_run", Some("medium")),
+                ("recovery_run", Some("short")),
+            ]
+        };
+
+        for (day_offset, (workout_type, duration_category)) in
+            day_specs.iter().enumerate()
+        {
+            let date = week_start + chrono::Duration::days(day_offset as i64);
+            let mut day_json = json!({
+                "date": date.format("%Y-%m-%d").to_string(),
+                "workout_type": workout_type,
+            });
+            if let Some(dc) = duration_category {
+                day_json["duration_category"] = json!(dc);
+            }
+            days.push(day_json);
+        }
+
+        weeks_json.push(json!({
+            "week_number": week_num + 1,
+            "week_type": week_type,
+            "target_volume_km": target_vol,
+            "target_weekly_tss": target_tss,
+            "days": days
+        }));
+    }
+
+    let mesocycle_plan_input = json!({
+        "mesocycle_overview": "Building aerobic capacity with progressive volume.",
+        "weeks": weeks_json
+    });
+
+    // Collect all workout dates for coach notes
+    let mut all_dates: Vec<String> = Vec::new();
+    for week in weeks_json.iter() {
+        for day in week["days"].as_array().unwrap() {
+            let date = day["date"].as_str().unwrap().to_string();
+            let wt = day["workout_type"].as_str().unwrap();
+            if wt != "rest" {
+                all_dates.push(date);
+            }
+        }
+    }
+
+    let workout_notes: Vec<Value> = all_dates
+        .iter()
+        .map(|date| {
+            json!({
+                "date": date,
+                "coach_note": format!("Focus on good form today ({})", date)
+            })
+        })
+        .collect();
+
+    let coach_notes_input = json!({
+        "mesocycle_overview": "Building aerobic capacity with progressive volume.",
+        "workout_notes": workout_notes
+    });
+
+    // The skeleton for the generate step
+    let skeleton_input = json!({
+        "target_ctl": 55.0,
+        "coach_message": "We'll build your aerobic engine first, then sharpen for race day.",
+        "mesocycles": [
+            {
+                "sequence_number": 1,
+                "phase": "capacity",
+                "focus": "aerobic_capacity",
+                "load_weeks": 3,
+                "recovery_weeks": 1,
+                "target_volume_km": 40.0
+            },
+            {
+                "sequence_number": 2,
+                "phase": "utilization",
+                "focus": "race_specific",
+                "load_weeks": 2,
+                "recovery_weeks": 1,
+                "target_volume_km": 45.0
+            }
+        ]
+    });
+
+    // Mount mocks in sequence:
+    // Call 1 (generate): returns skeleton
+    // Call 2 (confirm - mesocycle plan): returns mesocycle plan
+    // Call 3 (confirm - coach notes): returns coach notes
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(claude_tool_use_response(
+                "generate_macrocycle_skeleton",
+                skeleton_input.clone(),
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(claude_tool_use_response(
+                "generate_mesocycle_plan",
+                mesocycle_plan_input,
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(claude_tool_use_response(
+                "add_coach_notes",
+                coach_notes_input,
+            )),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let app = test_app_with_claude(&mock_server.uri()).await;
+    let (app, session_id, race_goal_id) = setup_user_with_profile(app).await;
+
+    // Step 1: Generate the macrocycle skeleton
+    let generate_body = json!({ "race_goal_id": race_goal_id });
+    let response = send_request(
+        app.clone(),
+        post_json_authed("/api/plan/generate", &generate_body, &session_id),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "generate should succeed"
+    );
+
+    let skeleton_json = body_json(response).await;
+    assert_eq!(skeleton_json["target_ctl"], 55.0);
+    assert_eq!(
+        skeleton_json["mesocycles"].as_array().unwrap().len(),
+        2
+    );
+
+    // Step 2: Confirm the plan (which generates mesocycle workouts + coach notes)
+    let response = send_request(
+        app.clone(),
+        post_json_authed("/api/plan/confirm", &skeleton_json, &session_id),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "confirm should succeed"
+    );
+
+    let plan_json = body_json(response).await;
+
+    // Verify the response structure
+    assert!(plan_json["macrocycle"]["id"].is_number());
+    assert_eq!(plan_json["macrocycle"]["status"], "active");
+    assert_eq!(plan_json["macrocycle"]["target_ctl"], 55.0);
+
+    let mesocycles = plan_json["mesocycles"].as_array().unwrap();
+    assert_eq!(mesocycles.len(), 2);
+    assert_eq!(mesocycles[0]["phase"], "capacity");
+    assert_eq!(mesocycles[1]["phase"], "utilization");
+
+    let workouts = plan_json["workouts"].as_array().unwrap();
+    // 4 weeks * 7 days = 28 workouts
+    assert_eq!(workouts.len(), 28);
+
+    // Verify some workout details
+    let first_workout = &workouts[0];
+    assert_eq!(first_workout["workout_type"], "easy_run");
+    assert!(first_workout["duration_min"].is_number());
+    assert!(first_workout["expected_tss"].is_number());
+
+    // Verify coach notes were applied (non-rest workouts should have notes)
+    let non_rest_with_notes: Vec<&Value> = workouts
+        .iter()
+        .filter(|w| {
+            w["workout_type"].as_str().unwrap() != "rest"
+                && w["coach_notes"].is_string()
+        })
+        .collect();
+    assert!(
+        !non_rest_with_notes.is_empty(),
+        "Some non-rest workouts should have coach notes"
+    );
+
+    // Step 3: Verify GET /api/plan returns the persisted plan
+    let response = send_request(
+        app,
+        get_authed("/api/plan", &session_id),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let get_plan_json = body_json(response).await;
+    assert!(get_plan_json["macrocycle"]["id"].is_number());
+    assert_eq!(get_plan_json["macrocycle"]["status"], "active");
+    assert_eq!(
+        get_plan_json["mesocycles"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        get_plan_json["workouts"].as_array().unwrap().len(),
+        28
+    );
+}
+
+#[tokio::test]
+async fn generate_plan_without_claude_client_returns_500() {
+    // Use the standard test_app which has claude_client: None
+    let app = test_app().await;
+    let (app, session_id) =
+        register_user(app, "noclaudeuser@example.com", "securepass123").await;
+
+    let profile_body = valid_profile_body();
+    let response = send_request(
+        app.clone(),
+        post_json_authed("/api/athlete/profile", &profile_body, &session_id),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let json = body_json(response).await;
+    let race_goal_id = json["race_goal"]["id"].as_i64().unwrap();
+
+    let generate_body = json!({ "race_goal_id": race_goal_id });
+    let response = send_request(
+        app,
+        post_json_authed("/api/plan/generate", &generate_body, &session_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn generate_plan_without_profile_returns_404() {
+    let mock_server = MockServer::start().await;
+    let app = test_app_with_claude(&mock_server.uri()).await;
+
+    let (app, session_id) =
+        register_user(app, "noprofile@example.com", "securepass123").await;
+
+    // Try to generate without creating a profile first
+    let generate_body = json!({ "race_goal_id": 1 });
+    let response = send_request(
+        app,
+        post_json_authed("/api/plan/generate", &generate_body, &session_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_plan_without_plan_returns_404() {
+    let app = test_app().await;
+    let (app, session_id) =
+        register_user(app, "noplan@example.com", "securepass123").await;
+
+    let response = send_request(
+        app,
+        get_authed("/api/plan", &session_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

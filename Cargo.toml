@@ -43,3 +43,4 @@ thiserror = "2"
 
 [dev-dependencies]
 http-body-util = "0.1"
+wiremock = "0.6"
