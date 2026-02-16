@@ -21,6 +21,9 @@ use crate::domain::validation::{
 use crate::domain::workouts::{DurationCategory, WorkoutRegistry, WorkoutType};
 use crate::domain::zones::{calculate_hr_zones, calculate_pace_zones};
 
+const DEFAULT_STRENGTH_DURATION_MIN: u16 = 45;
+const DEFAULT_STRENGTH_TSS: f64 = 30.0;
+
 // ---------------------------------------------------------------------------
 // Data structures
 // ---------------------------------------------------------------------------
@@ -112,7 +115,9 @@ pub async fn generate_skeleton(
     ctl: f64,
 ) -> Result<MacrocycleSkeleton, PlanError> {
     let today = chrono::Utc::now().date_naive();
-    let race_date = NaiveDate::parse_from_str(&race_goal.race_date, "%Y-%m-%d").unwrap_or(today);
+    let race_date = NaiveDate::parse_from_str(&race_goal.race_date, "%Y-%m-%d").map_err(|e| {
+        PlanError::InvalidResponse(format!("Invalid race date '{}': {}", race_goal.race_date, e))
+    })?;
     let weeks_until_race = (race_date - today).num_weeks();
 
     let context = build_macrocycle_context(profile, race_goal, ctl, weeks_until_race);
@@ -404,8 +409,13 @@ pub async fn confirm_and_generate_plan(
                 });
             }
 
-            // If retries didn't resolve, log warning but continue with original
-            warn!("Retries exhausted; proceeding with original plan despite validation errors");
+            // If retries didn't resolve, fail the operation
+            let error_descriptions: Vec<String> =
+                all_errors.iter().map(|e| format!("{:?}", e)).collect();
+            return Err(PlanError::ValidationFailed(format!(
+                "Plan has severe validation errors after 2 retries: {}",
+                error_descriptions.join("; ")
+            )));
         }
     }
 
@@ -653,13 +663,13 @@ pub(crate) fn fill_workouts_from_registry(
                     date: day.date.clone(),
                     workout_type: wt,
                     duration_category: None,
-                    duration_min: Some(45),
+                    duration_min: Some(DEFAULT_STRENGTH_DURATION_MIN),
                     structure: Some(format!("{} session", wt.display_name())),
                     description: Some(wt.display_name().to_string()),
                     target_hr_zones: vec![],
                     target_pace_zones: vec![],
                     hr_zone_display: None,
-                    expected_tss: 30.0,
+                    expected_tss: DEFAULT_STRENGTH_TSS,
                 });
                 continue;
             }
