@@ -323,7 +323,7 @@ impl WorkoutRegistry {
                 (DurationCategory::Long, DurationParams {
                     total_duration_min: 55,
                     structure: "10 min warmup + 25 min @ Zone 3-4 + 10 min cooldown",
-                    expected_tss_min: 55.0, expected_tss_max: 70.0,
+                    expected_tss_min: 65.0, expected_tss_max: 80.0,
                 }),
             ]),
         });
@@ -567,7 +567,7 @@ impl WorkoutRegistry {
         workout_type: &WorkoutType,
         duration_category: &DurationCategory,
         hr_zones: &crate::domain::types::HrZones,
-        pace_zones: Option<&crate::domain::types::PaceZones>,
+        _pace_zones: Option<&crate::domain::types::PaceZones>,
     ) -> Option<ResolvedWorkout> {
         let template = self.templates.get(workout_type)?;
         let params = template.durations.get(duration_category)?;
