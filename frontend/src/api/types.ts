@@ -55,6 +55,7 @@ export interface ProfileResponse {
   profile: AthleteProfile;
   hr_zones: HrZones;
   pace_zones: PaceZones | null;
+  race_goal: RaceGoal | null;
 }
 
 export interface RaceGoal {

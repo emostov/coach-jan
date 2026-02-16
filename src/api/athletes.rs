@@ -5,6 +5,8 @@ use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use sqlx::sqlite::SqlitePool;
+
 use crate::api::middleware::AuthUser;
 use crate::db::profiles::{
     self, AthleteProfile, CreateProfile, CreateRaceGoal, UpdateProfile,
@@ -71,10 +73,20 @@ pub struct ProfileData {
 }
 
 #[derive(Serialize)]
+pub struct RaceGoalData {
+    pub id: i64,
+    pub race_name: Option<String>,
+    pub distance_m: f64,
+    pub race_date: String,
+    pub target_time_seconds: Option<i64>,
+}
+
+#[derive(Serialize)]
 pub struct ProfileResponse {
     pub profile: ProfileData,
     pub hr_zones: HrZones,
     pub pace_zones: Option<PaceZones>,
+    pub race_goal: Option<RaceGoalData>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,17 +112,31 @@ fn profile_to_data(p: &AthleteProfile) -> ProfileData {
     }
 }
 
-fn build_profile_response(profile: &AthleteProfile) -> ProfileResponse {
+async fn build_profile_response(
+    pool: &SqlitePool,
+    profile: &AthleteProfile,
+) -> AppResult<ProfileResponse> {
     let hr_zones = calculate_hr_zones(profile.lthr as u16);
     let pace_zones = profile
         .ftpace_m_per_s
         .map(calculate_pace_zones);
 
-    ProfileResponse {
+    let race_goal = profiles::get_active_race_goal(pool, profile.user_id)
+        .await?
+        .map(|rg| RaceGoalData {
+            id: rg.id,
+            race_name: rg.race_name,
+            distance_m: rg.distance_m,
+            race_date: rg.race_date,
+            target_time_seconds: rg.target_time_seconds,
+        });
+
+    Ok(ProfileResponse {
         profile: profile_to_data(profile),
         hr_zones,
         pace_zones,
-    }
+        race_goal,
+    })
 }
 
 /// Validate the create profile request fields.
@@ -227,8 +253,8 @@ async fn create_athlete_profile(
     profiles::create_daily_metrics(&state.db, auth.user_id, &today, 0.0, atl, ctl, tsb)
         .await?;
 
-    // 6. Build response with zones
-    let response = build_profile_response(&profile);
+    // 6. Build response with zones and race goal
+    let response = build_profile_response(&state.db, &profile).await?;
 
     Ok((StatusCode::CREATED, Json(response)))
 }
@@ -242,7 +268,7 @@ async fn get_athlete_profile(
         .await?
         .ok_or_else(|| AppError::NotFound("No athlete profile found".to_string()))?;
 
-    let response = build_profile_response(&profile);
+    let response = build_profile_response(&state.db, &profile).await?;
 
     Ok(Json(response))
 }
@@ -308,8 +334,8 @@ async fn update_athlete_profile(
         }
     }
 
-    // 4. Build response with updated zones
-    let response = build_profile_response(&updated);
+    // 4. Build response with updated zones and race goal
+    let response = build_profile_response(&state.db, &updated).await?;
 
     Ok(Json(response))
 }
@@ -443,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_profile_response_with_ftpace() {
+    fn test_profile_response_zones_with_ftpace() {
         let profile = AthleteProfile {
             id: 1,
             user_id: 1,
@@ -461,14 +487,23 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".into(),
         };
 
-        let resp = build_profile_response(&profile);
+        let hr_zones = calculate_hr_zones(profile.lthr as u16);
+        let pace_zones = profile.ftpace_m_per_s.map(calculate_pace_zones);
+        let data = profile_to_data(&profile);
+
+        let resp = ProfileResponse {
+            profile: data,
+            hr_zones,
+            pace_zones,
+            race_goal: None,
+        };
         assert_eq!(resp.hr_zones.len(), 7);
         assert!(resp.pace_zones.is_some());
         assert_eq!(resp.pace_zones.unwrap().len(), 6);
     }
 
     #[test]
-    fn test_build_profile_response_without_ftpace() {
+    fn test_profile_response_zones_without_ftpace() {
         let profile = AthleteProfile {
             id: 1,
             user_id: 1,
@@ -486,7 +521,16 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".into(),
         };
 
-        let resp = build_profile_response(&profile);
+        let hr_zones = calculate_hr_zones(profile.lthr as u16);
+        let pace_zones = profile.ftpace_m_per_s.map(calculate_pace_zones);
+        let data = profile_to_data(&profile);
+
+        let resp = ProfileResponse {
+            profile: data,
+            hr_zones,
+            pace_zones,
+            race_goal: None,
+        };
         assert_eq!(resp.hr_zones.len(), 7);
         assert!(resp.pace_zones.is_none());
     }

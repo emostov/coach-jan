@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useCreateProfile } from '../hooks/useAthlete';
+import { useGeneratePlan, useConfirmPlan } from '../hooks/usePlan';
 import { formatPace } from '../utils/formatting';
 import type { CreateProfileInput } from '../api/athlete';
+import type { RaceGoal, MacrocycleSkeleton } from '../api/types';
 
 // ────────────────────────────────────────────────────
 // Schemas per step
@@ -89,7 +91,21 @@ const selectClass =
   'w-full px-3.5 py-2.5 rounded-lg border border-cream-dark bg-cream/50 text-charcoal focus:outline-none focus:ring-2 focus:ring-forest/30 focus:border-forest transition-colors appearance-none';
 
 // ────────────────────────────────────────────────────
-// Steps
+// Coach Jan Avatar (reusable)
+// ────────────────────────────────────────────────────
+
+function CoachAvatar({ size = 'sm' }: { size?: 'sm' | 'lg' }) {
+  const sizeClass = size === 'lg' ? 'w-16 h-16' : 'w-7 h-7';
+  const textClass = size === 'lg' ? 'text-2xl' : 'text-xs';
+  return (
+    <div className={`${sizeClass} rounded-full bg-forest flex items-center justify-center`}>
+      <span className={`text-cream ${textClass} font-bold font-serif`}>J</span>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────
+// Steps 1-4 (form steps)
 // ────────────────────────────────────────────────────
 
 function StepBasicInfo({
@@ -404,7 +420,7 @@ function StepGoal({
 }
 
 // ────────────────────────────────────────────────────
-// Review step
+// Step 5: Review
 // ────────────────────────────────────────────────────
 
 interface AllData {
@@ -526,6 +542,201 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
 }
 
 // ────────────────────────────────────────────────────
+// Step 6: Plan Generation Loading
+// ────────────────────────────────────────────────────
+
+const COACHING_MESSAGES = [
+  'Analyzing your physiology...',
+  'Mapping your race timeline...',
+  'Designing your periodization...',
+  'Building your training blocks...',
+];
+
+function StepPlanGenerating({
+  raceGoalId,
+  onSuccess,
+}: {
+  raceGoalId: number;
+  onSuccess: (skeleton: MacrocycleSkeleton) => void;
+}) {
+  const [messageIndex, setMessageIndex] = useState(0);
+  const generatePlan = useGeneratePlan();
+  const hasFired = useRef(false);
+
+  // Rotate coaching messages every 3 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setMessageIndex((prev) => (prev + 1) % COACHING_MESSAGES.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-fire plan generation on mount
+  useEffect(() => {
+    if (hasFired.current) return;
+    hasFired.current = true;
+
+    generatePlan.mutate(raceGoalId, {
+      onSuccess: (skeleton) => onSuccess(skeleton),
+    });
+  }, [raceGoalId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRetry = () => {
+    generatePlan.mutate(raceGoalId, {
+      onSuccess: (skeleton) => onSuccess(skeleton),
+    });
+  };
+
+  return (
+    <div className="flex flex-col items-center py-8">
+      {/* Pulsing Coach Jan avatar */}
+      <div className="relative mb-8">
+        <div className="absolute inset-0 w-16 h-16 rounded-full bg-forest/20 animate-ping" />
+        <div className="relative">
+          <CoachAvatar size="lg" />
+        </div>
+      </div>
+
+      {/* Rotating message */}
+      <p className="text-lg text-charcoal font-medium text-center mb-2 min-h-[1.75rem] transition-opacity duration-300">
+        {COACHING_MESSAGES[messageIndex]}
+      </p>
+      <p className="text-sm text-slate text-center">
+        Coach Jan is designing your training plan
+      </p>
+
+      {/* Error state */}
+      {generatePlan.isError && (
+        <div className="mt-6 w-full">
+          <div className="p-3 rounded-lg bg-terra/10 border border-terra/20 text-terra text-sm mb-4">
+            {generatePlan.error?.message ?? 'Failed to generate plan. Please try again.'}
+          </div>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="w-full py-2.5 px-4 rounded-lg bg-terra text-cream font-medium hover:bg-terra-light transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────
+// Step 7: Skeleton Review
+// ────────────────────────────────────────────────────
+
+function StepSkeletonReview({
+  skeleton,
+  onConfirm,
+}: {
+  skeleton: MacrocycleSkeleton;
+  onConfirm: () => void;
+}) {
+  const navigate = useNavigate();
+  const confirmPlan = useConfirmPlan();
+  const [isConfirming, setIsConfirming] = useState(false);
+
+  const handleConfirm = () => {
+    setIsConfirming(true);
+    confirmPlan.mutate(skeleton, {
+      onSuccess: () => {
+        onConfirm();
+        navigate('/');
+      },
+      onError: () => {
+        setIsConfirming(false);
+      },
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Coach message */}
+      <div className="rounded-xl bg-forest/5 border border-forest/10 p-5">
+        <div className="flex gap-3">
+          <div className="flex-shrink-0 mt-0.5">
+            <CoachAvatar size="sm" />
+          </div>
+          <div>
+            <p className="text-sm text-charcoal leading-relaxed">
+              <span className="font-medium">Coach Jan says:</span>{' '}
+              {skeleton.coach_message}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Training blocks */}
+      <div className="space-y-3">
+        {skeleton.mesocycles.map((meso, i) => (
+          <div
+            key={meso.sequence_number}
+            className="rounded-xl bg-white border border-cream-dark p-5"
+          >
+            <div className="flex items-start justify-between mb-2">
+              <div>
+                <p className="text-xs text-slate uppercase tracking-wider font-medium">
+                  Training Block {i + 1}
+                </p>
+                <h4 className="font-serif text-lg text-charcoal font-semibold mt-0.5">
+                  {meso.phase.charAt(0).toUpperCase() + meso.phase.slice(1)}
+                </h4>
+              </div>
+            </div>
+            <p className="text-sm text-slate leading-relaxed mb-3">
+              {meso.focus}
+            </p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-light">
+              <span>
+                {meso.load_weeks} week{meso.load_weeks !== 1 ? 's' : ''} loading + {meso.recovery_weeks} week{meso.recovery_weeks !== 1 ? 's' : ''} recovery
+              </span>
+              <span>
+                ~{Math.round(meso.target_volume_km)} km/week
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Confirming state */}
+      {isConfirming && (
+        <div className="flex flex-col items-center py-4">
+          <div className="relative mb-4">
+            <div className="absolute inset-0 w-10 h-10 rounded-full bg-forest/20 animate-ping" />
+            <div className="relative w-10 h-10 rounded-full bg-forest flex items-center justify-center">
+              <span className="text-cream text-sm font-bold font-serif">J</span>
+            </div>
+          </div>
+          <p className="text-sm text-charcoal font-medium">Generating your workouts...</p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {confirmPlan.isError && (
+        <div className="p-3 rounded-lg bg-terra/10 border border-terra/20 text-terra text-sm">
+          {confirmPlan.error?.message ?? 'Failed to confirm plan. Please try again.'}
+        </div>
+      )}
+
+      {/* Actions */}
+      {!isConfirming && (
+        <button
+          type="button"
+          onClick={handleConfirm}
+          disabled={confirmPlan.isPending}
+          className="w-full py-2.5 px-4 rounded-lg bg-terra text-cream font-medium hover:bg-terra-light transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Confirm Plan
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────
 // Navigation buttons (shared)
 // ────────────────────────────────────────────────────
 
@@ -555,7 +766,10 @@ function StepButtons({ onBack }: { onBack?: () => void }) {
 // Progress indicator
 // ────────────────────────────────────────────────────
 
-const STEP_LABELS = ['Basics', 'Physiology', 'Running', 'Goal', 'Review'];
+const STEP_LABELS = ['Basics', 'Physiology', 'Running', 'Goal', 'Review', 'Building', 'Your Plan'];
+
+// Steps 1-5 are "profile setup", steps 6-7 are "plan generation"
+const PROFILE_STEP_COUNT = 5;
 
 function StepProgress({ current }: { current: number }) {
   return (
@@ -564,16 +778,25 @@ function StepProgress({ current }: { current: number }) {
         const step = i + 1;
         const isActive = step === current;
         const isCompleted = step < current;
+        const isPlanPhase = step > PROFILE_STEP_COUNT;
 
         return (
           <div key={label} className="flex items-center gap-2">
+            {/* Separator gap between profile and plan phases */}
+            {step === PROFILE_STEP_COUNT + 1 && (
+              <div className="w-px h-6 bg-cream-dark mx-0.5" />
+            )}
             <div className="flex flex-col items-center gap-1">
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
                   isActive
-                    ? 'bg-forest text-cream'
+                    ? isPlanPhase
+                      ? 'bg-terra text-cream'
+                      : 'bg-forest text-cream'
                     : isCompleted
-                      ? 'bg-forest/20 text-forest'
+                      ? isPlanPhase
+                        ? 'bg-terra/20 text-terra'
+                        : 'bg-forest/20 text-forest'
                       : 'bg-cream-dark text-slate-light'
                 }`}
               >
@@ -587,16 +810,20 @@ function StepProgress({ current }: { current: number }) {
               </div>
               <span
                 className={`text-[10px] ${
-                  isActive ? 'text-forest font-medium' : 'text-slate-light'
+                  isActive
+                    ? isPlanPhase
+                      ? 'text-terra font-medium'
+                      : 'text-forest font-medium'
+                    : 'text-slate-light'
                 }`}
               >
                 {label}
               </span>
             </div>
-            {i < STEP_LABELS.length - 1 && (
+            {i < STEP_LABELS.length - 1 && step !== PROFILE_STEP_COUNT && (
               <div
                 className={`w-6 h-px mb-4 ${
-                  step < current ? 'bg-forest/30' : 'bg-cream-dark'
+                  step < current ? (isPlanPhase ? 'bg-terra/30' : 'bg-forest/30') : 'bg-cream-dark'
                 }`}
               />
             )}
@@ -669,6 +896,8 @@ export default function Onboarding() {
   const [step3Data, setStep3Data] = useState<Step3Data | null>(null);
   const [step4Data, setStep4Data] = useState<Step4Data | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [raceGoal, setRaceGoal] = useState<RaceGoal | null>(null);
+  const [skeleton, setSkeleton] = useState<MacrocycleSkeleton | null>(null);
 
   const navigate = useNavigate();
   const createProfile = useCreateProfile();
@@ -685,10 +914,26 @@ export default function Onboarding() {
     });
 
     createProfile.mutate(payload, {
-      onSuccess: () => navigate('/'),
+      onSuccess: (data) => {
+        // Save race goal from response, transition to plan generation
+        if (data.race_goal) {
+          setRaceGoal(data.race_goal);
+        }
+        setStep(6);
+      },
       onError: (error) => setApiError(error.message),
     });
   };
+
+  // Determine header text based on phase
+  const isProfilePhase = step <= PROFILE_STEP_COUNT;
+  const headerTitle = isProfilePhase ? "Let's get started" : 'Building your plan';
+  const headerSubtitle = isProfilePhase
+    ? 'Tell us about yourself so we can build your training plan'
+    : 'Coach Jan is crafting your personalized training';
+
+  // For steps 6-7, don't show the step title inside the card
+  const showStepTitle = step <= PROFILE_STEP_COUNT;
 
   return (
     <div className="min-h-screen bg-cream flex items-center justify-center px-4 py-8">
@@ -696,10 +941,10 @@ export default function Onboarding() {
         {/* Brand */}
         <div className="text-center mb-2">
           <h1 className="font-serif text-3xl text-forest font-bold tracking-tight">
-            Let's get started
+            {headerTitle}
           </h1>
           <p className="mt-1 text-slate text-sm">
-            Tell us about yourself so we can build your training plan
+            {headerSubtitle}
           </p>
         </div>
 
@@ -707,9 +952,11 @@ export default function Onboarding() {
 
         {/* Card */}
         <div className="bg-white rounded-2xl shadow-sm border border-cream-dark p-6 sm:p-8">
-          <h2 className="font-serif text-xl text-charcoal mb-4">
-            {STEP_LABELS[step - 1]}
-          </h2>
+          {showStepTitle && (
+            <h2 className="font-serif text-xl text-charcoal mb-4">
+              {STEP_LABELS[step - 1]}
+            </h2>
+          )}
 
           {step === 1 && (
             <StepBasicInfo
@@ -763,11 +1010,32 @@ export default function Onboarding() {
               apiError={apiError}
             />
           )}
+
+          {step === 6 && raceGoal && (
+            <StepPlanGenerating
+              raceGoalId={raceGoal.id}
+              onSuccess={(skel) => {
+                setSkeleton(skel);
+                setStep(7);
+              }}
+            />
+          )}
+
+          {step === 7 && skeleton && (
+            <StepSkeletonReview
+              skeleton={skeleton}
+              onConfirm={() => {
+                navigate('/');
+              }}
+            />
+          )}
         </div>
 
-        <p className="mt-4 text-center text-xs text-slate-light">
-          You can update these details any time from your profile
-        </p>
+        {step <= PROFILE_STEP_COUNT && (
+          <p className="mt-4 text-center text-xs text-slate-light">
+            You can update these details any time from your profile
+          </p>
+        )}
       </div>
     </div>
   );
