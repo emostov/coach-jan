@@ -468,6 +468,37 @@ pub async fn get_previous_mesocycle_workouts(
         .collect())
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct MesocycleWithWorkouts {
+    #[serde(flatten)]
+    pub mesocycle: Mesocycle,
+    pub workouts: Vec<PlannedWorkout>,
+}
+
+/// Get the full plan: active macrocycle with all mesocycles and their workouts.
+pub async fn get_plan_with_all_workouts(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> AppResult<Option<(Macrocycle, Vec<MesocycleWithWorkouts>)>> {
+    let macrocycle = match get_current_macrocycle(pool, user_id).await? {
+        Some(mc) => mc,
+        None => return Ok(None),
+    };
+
+    let mesocycles = get_mesocycles(pool, macrocycle.id).await?;
+
+    let mut result = Vec::new();
+    for meso in mesocycles {
+        let workouts = get_planned_workouts(pool, meso.id).await?;
+        result.push(MesocycleWithWorkouts {
+            mesocycle: meso,
+            workouts,
+        });
+    }
+
+    Ok(Some((macrocycle, result)))
+}
+
 /// Get the current active plan for a user: the active macrocycle and all its mesocycles.
 /// Returns `None` if the user has no active macrocycle.
 pub async fn get_current_plan(
@@ -1138,5 +1169,88 @@ mod tests {
         assert_eq!(prev.len(), 2);
         assert_eq!(prev[0].scheduled_date, "2026-03-03");
         assert_eq!(prev[1].scheduled_date, "2026-03-04");
+    }
+
+    // -----------------------------------------------------------------------
+    // get_plan_with_all_workouts tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_plan_with_all_workouts() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso1 = create_test_mesocycle(&pool, mc.id).await;
+
+        // Create a second mesocycle
+        let input2 = CreateMesocycle {
+            macrocycle_id: mc.id,
+            sequence_number: 2,
+            phase: "utilization".to_string(),
+            focus: "aerobic_utilization".to_string(),
+            load_weeks: 2,
+            recovery_weeks: 1,
+            target_volume_km: Some(140.0),
+            start_date: "2026-03-29".to_string(),
+            end_date: "2026-04-18".to_string(),
+        };
+        let meso2 = create_mesocycle(&pool, &input2).await.expect("create meso2");
+
+        // Add workouts to both
+        let w1 = CreatePlannedWorkout {
+            mesocycle_id: meso1.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: Some(8.0),
+        };
+        create_planned_workout(&pool, &w1).await.expect("w1");
+
+        let w2 = CreatePlannedWorkout {
+            mesocycle_id: meso2.id,
+            user_id,
+            scheduled_date: "2026-04-01".to_string(),
+            workout_type: "tempo_run".to_string(),
+            duration_min: Some(50),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(70.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: Some(10.0),
+        };
+        create_planned_workout(&pool, &w2).await.expect("w2");
+
+        let result = get_plan_with_all_workouts(&pool, user_id)
+            .await
+            .expect("should not error")
+            .expect("should find plan");
+
+        let (found_mc, meso_with_workouts) = result;
+        assert_eq!(found_mc.id, mc.id);
+        assert_eq!(meso_with_workouts.len(), 2);
+        assert_eq!(meso_with_workouts[0].workouts.len(), 1);
+        assert_eq!(meso_with_workouts[0].workouts[0].workout_type, "easy_run");
+        assert_eq!(meso_with_workouts[1].workouts.len(), 1);
+        assert_eq!(meso_with_workouts[1].workouts[0].workout_type, "tempo_run");
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_with_all_workouts_no_plan() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let result = get_plan_with_all_workouts(&pool, user_id)
+            .await
+            .expect("should not error");
+        assert!(result.is_none());
     }
 }
