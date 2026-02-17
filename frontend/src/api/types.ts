@@ -122,6 +122,7 @@ export interface PlannedWorkout {
   expected_tss: number | null;
   description: string | null;
   coach_notes: string | null;
+  target_distance_km: number | null;
   is_completed: number;
   completed_workout_id: number | null;
   created_at: string;
@@ -135,6 +136,21 @@ export interface GeneratedPlan {
 
 export interface PlanResponse {
   macrocycle: Macrocycle;
-  mesocycles: Mesocycle[];
+  mesocycles: MesocycleWithWorkouts[];
+}
+
+export interface MesocycleWithWorkouts extends Mesocycle {
   workouts: PlannedWorkout[];
+}
+
+export interface MesocycleContext {
+  id: number;
+  phase: string;
+  focus: string;
+  sequence_number: number;
+}
+
+export interface WorkoutDetailResponse {
+  workout: PlannedWorkout;
+  mesocycle: MesocycleContext;
 }

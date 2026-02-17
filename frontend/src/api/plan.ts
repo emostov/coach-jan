@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { MacrocycleSkeleton, GeneratedPlan, PlanResponse } from './types';
+import type { MacrocycleSkeleton, GeneratedPlan, PlanResponse, WorkoutDetailResponse } from './types';
 
 export function generatePlan(raceGoalId: number): Promise<MacrocycleSkeleton> {
   return apiFetch('/plan/generate', {
@@ -17,4 +17,8 @@ export function confirmPlan(skeleton: MacrocycleSkeleton): Promise<GeneratedPlan
 
 export function getCurrentPlan(): Promise<PlanResponse> {
   return apiFetch('/plan');
+}
+
+export function getWorkout(workoutId: number): Promise<WorkoutDetailResponse> {
+  return apiFetch(`/plan/workout/${workoutId}`);
 }

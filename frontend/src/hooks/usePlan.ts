@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as planApi from '../api/plan';
-import type { MacrocycleSkeleton } from '../api/types';
+import type { MacrocycleSkeleton, WorkoutDetailResponse } from '../api/types';
 
 export function useGeneratePlan() {
   const queryClient = useQueryClient();
@@ -27,5 +27,13 @@ export function useCurrentPlan() {
     queryKey: ['plan'],
     queryFn: planApi.getCurrentPlan,
     retry: false,
+  });
+}
+
+export function useWorkout(workoutId: number | null) {
+  return useQuery({
+    queryKey: ['workout', workoutId],
+    queryFn: () => planApi.getWorkout(workoutId!),
+    enabled: workoutId !== null,
   });
 }
