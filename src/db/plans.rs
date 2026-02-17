@@ -499,6 +499,70 @@ pub async fn get_plan_with_all_workouts(
     Ok(Some((macrocycle, result)))
 }
 
+/// Minimal mesocycle context for workout detail view.
+#[derive(Debug, Clone, Serialize)]
+pub struct MesocycleContext {
+    pub id: i64,
+    pub phase: String,
+    pub focus: String,
+    pub sequence_number: i64,
+}
+
+/// Get a single workout with its mesocycle context. Verifies user ownership.
+pub async fn get_workout_with_context(
+    pool: &SqlitePool,
+    workout_id: i64,
+    user_id: i64,
+) -> AppResult<Option<(PlannedWorkout, MesocycleContext)>> {
+    let row = sqlx::query(
+        r#"SELECT pw.id, pw.mesocycle_id, pw.user_id, pw.scheduled_date, pw.workout_type,
+                  pw.duration_min, pw.duration_category, pw.target_hr_zones, pw.target_pace_zones,
+                  pw.expected_tss, pw.description, pw.coach_notes, pw.target_distance_km,
+                  pw.is_completed, pw.completed_workout_id, pw.rpe, pw.athlete_notes,
+                  pw.actual_duration_min, pw.completed_at, pw.created_at,
+                  m.id as meso_id, m.phase, m.focus, m.sequence_number
+           FROM planned_workouts pw
+           JOIN mesocycles m ON pw.mesocycle_id = m.id
+           WHERE pw.id = ? AND pw.user_id = ?"#,
+    )
+    .bind(workout_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| {
+        let workout = PlannedWorkout {
+            id: r.get("id"),
+            mesocycle_id: r.get("mesocycle_id"),
+            user_id: r.get("user_id"),
+            scheduled_date: r.get("scheduled_date"),
+            workout_type: r.get("workout_type"),
+            duration_min: r.get("duration_min"),
+            duration_category: r.get("duration_category"),
+            target_hr_zones: r.get("target_hr_zones"),
+            target_pace_zones: r.get("target_pace_zones"),
+            expected_tss: r.get("expected_tss"),
+            description: r.get("description"),
+            coach_notes: r.get("coach_notes"),
+            target_distance_km: r.get("target_distance_km"),
+            is_completed: r.get("is_completed"),
+            completed_workout_id: r.get("completed_workout_id"),
+            rpe: r.get("rpe"),
+            athlete_notes: r.get("athlete_notes"),
+            actual_duration_min: r.get("actual_duration_min"),
+            completed_at: r.get("completed_at"),
+            created_at: r.get("created_at"),
+        };
+        let context = MesocycleContext {
+            id: r.get("meso_id"),
+            phase: r.get("phase"),
+            focus: r.get("focus"),
+            sequence_number: r.get("sequence_number"),
+        };
+        (workout, context)
+    }))
+}
+
 /// Get the current active plan for a user: the active macrocycle and all its mesocycles.
 /// Returns `None` if the user has no active macrocycle.
 pub async fn get_current_plan(
@@ -1251,6 +1315,75 @@ mod tests {
         let result = get_plan_with_all_workouts(&pool, user_id)
             .await
             .expect("should not error");
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_workout_with_context tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_workout_with_context() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        let w = CreatePlannedWorkout {
+            mesocycle_id: meso.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: None,
+        };
+        let workout = create_planned_workout(&pool, &w).await.expect("create");
+
+        let (found, ctx) = get_workout_with_context(&pool, workout.id, user_id)
+            .await
+            .expect("ok")
+            .expect("found");
+        assert_eq!(found.id, workout.id);
+        assert_eq!(ctx.phase, "capacity");
+        assert_eq!(ctx.focus, "aerobic_capacity");
+        assert_eq!(ctx.sequence_number, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_workout_with_context_wrong_user() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        let w = CreatePlannedWorkout {
+            mesocycle_id: meso.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: None,
+        };
+        let workout = create_planned_workout(&pool, &w).await.expect("create");
+
+        // Wrong user_id should return None
+        let result = get_workout_with_context(&pool, workout.id, 99999)
+            .await
+            .expect("ok");
         assert!(result.is_none());
     }
 }
