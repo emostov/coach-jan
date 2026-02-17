@@ -1211,3 +1211,293 @@ async fn get_plan_without_plan_returns_404() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// ===========================================================================
+// Phase 3 endpoint tests — GET /api/plan and GET /api/plan/workout/:id
+// ===========================================================================
+
+/// Build a test app *and* return a handle to the underlying SQLite pool so
+/// tests can insert seed data directly without needing Claude mocks.
+async fn test_app_with_pool() -> (Router, sqlx::SqlitePool) {
+    let connect_options = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true)
+        .pragma("foreign_keys", "ON");
+
+    let db = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options)
+        .await
+        .expect("Failed to create in-memory SQLite pool");
+
+    sqlx::migrate!("./migrations")
+        .run(&db)
+        .await
+        .expect("Failed to run migrations");
+
+    let config = Config {
+        database_url: String::new(),
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        anthropic_api_key: None,
+    };
+
+    let pool = db.clone();
+    let state = AppState { db, config, claude_client: None };
+    (build_app(state), pool)
+}
+
+/// Register a user and create an athlete profile (with race goal) using the
+/// HTTP API, then insert a macrocycle + mesocycle + workouts directly into the
+/// database. Returns (app, session_id, pool) so callers can do further queries.
+async fn setup_plan_data(
+    app: Router,
+    pool: &sqlx::SqlitePool,
+    email: &str,
+) -> (Router, String, i64, i64) {
+    // Register user & create profile through the API so auth session exists
+    let (app, session_id) = register_user(app, email, "securepass123").await;
+
+    let profile_body = valid_profile_body();
+    let resp = send_request(
+        app.clone(),
+        post_json_authed("/api/athlete/profile", &profile_body, &session_id),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let json = body_json(resp).await;
+    let race_goal_id = json["race_goal"]["id"]
+        .as_i64()
+        .expect("race_goal should have an id");
+
+    // Look up the user_id from the DB (via session)
+    let user_row = sqlx::query("SELECT user_id FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_one(pool)
+        .await
+        .expect("should find session");
+    let user_id: i64 = sqlx::Row::get(&user_row, "user_id");
+
+    // Insert macrocycle directly
+    let mc_row = sqlx::query(
+        r#"INSERT INTO macrocycles (user_id, race_goal_id, start_date, end_date, target_ctl, coach_message)
+           VALUES (?, ?, '2026-03-01', '2026-09-27', 65.0, 'Building your aerobic base.')
+           RETURNING id"#,
+    )
+    .bind(user_id)
+    .bind(race_goal_id)
+    .fetch_one(pool)
+    .await
+    .expect("create macrocycle");
+    let macrocycle_id: i64 = sqlx::Row::get(&mc_row, "id");
+
+    // Insert two mesocycles
+    let meso1_row = sqlx::query(
+        r#"INSERT INTO mesocycles (macrocycle_id, sequence_number, phase, focus, load_weeks, recovery_weeks, target_volume_km, start_date, end_date)
+           VALUES (?, 1, 'capacity', 'aerobic_capacity', 3, 1, 160.0, '2026-03-01', '2026-03-28')
+           RETURNING id"#,
+    )
+    .bind(macrocycle_id)
+    .fetch_one(pool)
+    .await
+    .expect("create mesocycle 1");
+    let meso1_id: i64 = sqlx::Row::get(&meso1_row, "id");
+
+    let meso2_row = sqlx::query(
+        r#"INSERT INTO mesocycles (macrocycle_id, sequence_number, phase, focus, load_weeks, recovery_weeks, target_volume_km, start_date, end_date)
+           VALUES (?, 2, 'utilization', 'race_specific', 2, 1, 140.0, '2026-03-29', '2026-04-18')
+           RETURNING id"#,
+    )
+    .bind(macrocycle_id)
+    .fetch_one(pool)
+    .await
+    .expect("create mesocycle 2");
+    let meso2_id: i64 = sqlx::Row::get(&meso2_row, "id");
+
+    // Insert workouts into mesocycle 1
+    for (i, (wtype, dur, tss, dist)) in [
+        ("easy_run",  Some(45i64), Some(35.0), Some(8.5)),
+        ("tempo_run", Some(50),    Some(70.0), Some(10.0)),
+        ("rest",      None,        None,       None),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let date = format!("2026-03-{:02}", 3 + i);
+        sqlx::query(
+            r#"INSERT INTO planned_workouts
+                (mesocycle_id, user_id, scheduled_date, workout_type, duration_min, expected_tss, target_distance_km, coach_notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'Keep focused.')"#,
+        )
+        .bind(meso1_id)
+        .bind(user_id)
+        .bind(&date)
+        .bind(wtype)
+        .bind(dur)
+        .bind(tss)
+        .bind(dist)
+        .execute(pool)
+        .await
+        .expect("create workout in meso1");
+    }
+
+    // Insert one workout into mesocycle 2
+    sqlx::query(
+        r#"INSERT INTO planned_workouts
+            (mesocycle_id, user_id, scheduled_date, workout_type, duration_min, expected_tss, target_distance_km)
+           VALUES (?, ?, '2026-04-01', 'long_run', 90, 120.0, 18.0)"#,
+    )
+    .bind(meso2_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("create workout in meso2");
+
+    (app, session_id, macrocycle_id, user_id)
+}
+
+#[tokio::test]
+async fn get_plan_returns_mesocycles_with_nested_workouts() {
+    let (app, pool) = test_app_with_pool().await;
+    let (app, session_id, _mc_id, _user_id) =
+        setup_plan_data(app, &pool, "planview@example.com").await;
+
+    let response = send_request(app, get_authed("/api/plan", &session_id)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+
+    // Top-level structure
+    assert!(json["macrocycle"]["id"].is_number(), "macrocycle should have an id");
+    assert_eq!(json["macrocycle"]["status"], "active");
+    assert_eq!(json["macrocycle"]["target_ctl"], 65.0);
+
+    // Mesocycles array
+    let mesocycles = json["mesocycles"]
+        .as_array()
+        .expect("mesocycles should be an array");
+    assert_eq!(mesocycles.len(), 2);
+
+    // First mesocycle
+    assert_eq!(mesocycles[0]["phase"], "capacity");
+    assert_eq!(mesocycles[0]["focus"], "aerobic_capacity");
+    assert_eq!(mesocycles[0]["sequence_number"], 1);
+    let meso1_workouts = mesocycles[0]["workouts"]
+        .as_array()
+        .expect("mesocycle 1 should have workouts array");
+    assert_eq!(meso1_workouts.len(), 3);
+    assert_eq!(meso1_workouts[0]["workout_type"], "easy_run");
+    assert_eq!(meso1_workouts[0]["target_distance_km"], 8.5);
+    assert_eq!(meso1_workouts[1]["workout_type"], "tempo_run");
+    assert_eq!(meso1_workouts[1]["target_distance_km"], 10.0);
+    assert_eq!(meso1_workouts[2]["workout_type"], "rest");
+    assert!(
+        meso1_workouts[2]["target_distance_km"].is_null(),
+        "rest workout should have null target_distance_km"
+    );
+
+    // Second mesocycle
+    assert_eq!(mesocycles[1]["phase"], "utilization");
+    assert_eq!(mesocycles[1]["focus"], "race_specific");
+    assert_eq!(mesocycles[1]["sequence_number"], 2);
+    let meso2_workouts = mesocycles[1]["workouts"]
+        .as_array()
+        .expect("mesocycle 2 should have workouts array");
+    assert_eq!(meso2_workouts.len(), 1);
+    assert_eq!(meso2_workouts[0]["workout_type"], "long_run");
+    assert_eq!(meso2_workouts[0]["target_distance_km"], 18.0);
+    assert_eq!(meso2_workouts[0]["duration_min"], 90);
+}
+
+#[tokio::test]
+async fn get_workout_returns_workout_with_mesocycle_context() {
+    let (app, pool) = test_app_with_pool().await;
+    let (app, session_id, _mc_id, _user_id) =
+        setup_plan_data(app, &pool, "workoutview@example.com").await;
+
+    // Find the first workout id (easy_run on 2026-03-03)
+    let w_row = sqlx::query(
+        "SELECT id FROM planned_workouts WHERE scheduled_date = '2026-03-03' ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("find workout");
+    let workout_id: i64 = sqlx::Row::get(&w_row, "id");
+
+    let uri = format!("/api/plan/workout/{workout_id}");
+    let response = send_request(app, get_authed(&uri, &session_id)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+
+    // Workout fields
+    assert_eq!(json["workout"]["id"], workout_id);
+    assert_eq!(json["workout"]["workout_type"], "easy_run");
+    assert_eq!(json["workout"]["scheduled_date"], "2026-03-03");
+    assert_eq!(json["workout"]["duration_min"], 45);
+    assert_eq!(json["workout"]["expected_tss"], 35.0);
+    assert_eq!(json["workout"]["target_distance_km"], 8.5);
+    assert_eq!(json["workout"]["coach_notes"], "Keep focused.");
+    assert_eq!(json["workout"]["is_completed"], 0);
+
+    // Mesocycle context
+    assert!(json["mesocycle"]["id"].is_number());
+    assert_eq!(json["mesocycle"]["phase"], "capacity");
+    assert_eq!(json["mesocycle"]["focus"], "aerobic_capacity");
+    assert_eq!(json["mesocycle"]["sequence_number"], 1);
+}
+
+#[tokio::test]
+async fn get_workout_nonexistent_returns_404() {
+    let (app, _pool) = test_app_with_pool().await;
+    let (app, session_id) =
+        register_user(app, "noworkout@example.com", "securepass123").await;
+
+    let response = send_request(
+        app,
+        get_authed("/api/plan/workout/99999", &session_id),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_workout_for_other_user_returns_404() {
+    let (app, pool) = test_app_with_pool().await;
+
+    // User 1: create plan data
+    let (app, _session_user1, _mc_id, _user1_id) =
+        setup_plan_data(app, &pool, "owner@example.com").await;
+
+    // User 2: register with profile (but no plan data)
+    let (app, session_user2) =
+        register_user(app, "intruder@example.com", "securepass123").await;
+    let profile_body = valid_profile_body();
+    let resp = send_request(
+        app.clone(),
+        post_json_authed("/api/athlete/profile", &profile_body, &session_user2),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Find User 1's workout id
+    let w_row = sqlx::query(
+        "SELECT id FROM planned_workouts ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("find workout");
+    let workout_id: i64 = sqlx::Row::get(&w_row, "id");
+
+    // User 2 tries to access User 1's workout
+    let uri = format!("/api/plan/workout/{workout_id}");
+    let response = send_request(app, get_authed(&uri, &session_user2)).await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "accessing another user's workout should return 404"
+    );
+}
