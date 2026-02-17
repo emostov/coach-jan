@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import Profile from './pages/Profile';
+import Plan from './pages/Plan';
 import Shell from './components/layout/Shell';
 import type { ReactNode } from 'react';
 
@@ -89,6 +90,7 @@ export default function App() {
         >
           <Route path="/" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/plan" element={<Plan />} />
         </Route>
 
         {/* Catch all */}
