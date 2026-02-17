@@ -704,17 +704,17 @@ impl WorkoutRegistry {
             durations: HashMap::from([
                 (DurationCategory::Short, DurationParams {
                     total_duration_min: 45,
-                    structure: "10 min warmup + 3x5 min @ Zone 4-5 / 3 min jog + 10 min cooldown",
+                    structure: "10 min warmup + 6x5 min @ Zone 4-5 / 90s walk + 10 min cooldown",
                     expected_tss_min: 55.0, expected_tss_max: 75.0,
                 }),
                 (DurationCategory::Medium, DurationParams {
                     total_duration_min: 55,
-                    structure: "10 min warmup + 3x8 min @ Zone 4-5 / 3 min jog + 10 min cooldown",
+                    structure: "10 min warmup + 6x8 min @ Zone 4-5 / 90s walk + 10 min cooldown",
                     expected_tss_min: 70.0, expected_tss_max: 90.0,
                 }),
                 (DurationCategory::Long, DurationParams {
                     total_duration_min: 65,
-                    structure: "10 min warmup + 2x15 min @ Zone 4-5 / 5 min jog + 10 min cooldown",
+                    structure: "10 min warmup + 2x15 min @ Zone 4-5 / 90s walk + 10 min cooldown",
                     expected_tss_min: 80.0, expected_tss_max: 110.0,
                 }),
             ]),

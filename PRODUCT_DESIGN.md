@@ -1,6 +1,8 @@
 # CoachJan — AI Running Coach
 ## Product Design Document
 
+See [Future Features Roadmap](docs/FUTURE_FEATURES.md) for post-launch feature ideas.
+
 ---
 
 ## 1. Vision

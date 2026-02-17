@@ -227,8 +227,13 @@ pub struct PlannedWorkout {
     pub expected_tss: Option<f64>,
     pub description: Option<String>,
     pub coach_notes: Option<String>,
+    pub target_distance_km: Option<f64>,
     pub is_completed: i64,
     pub completed_workout_id: Option<i64>,
+    pub rpe: Option<i64>,
+    pub athlete_notes: Option<String>,
+    pub actual_duration_min: Option<i64>,
+    pub completed_at: Option<String>,
     pub created_at: String,
 }
 
@@ -245,6 +250,7 @@ pub struct CreatePlannedWorkout {
     pub expected_tss: Option<f64>,
     pub description: Option<String>,
     pub coach_notes: Option<String>,
+    pub target_distance_km: Option<f64>,
 }
 
 /// Create a new planned workout within a mesocycle. Defaults to not completed.
@@ -257,11 +263,14 @@ pub async fn create_planned_workout(
     let row = sqlx::query(
         r#"INSERT INTO planned_workouts
             (mesocycle_id, user_id, scheduled_date, workout_type, duration_min, duration_category,
-             target_hr_zones, target_pace_zones, expected_tss, description, coach_notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             target_hr_zones, target_pace_zones, expected_tss, description, coach_notes,
+             target_distance_km, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            RETURNING id, mesocycle_id, user_id, scheduled_date, workout_type, duration_min,
                      duration_category, target_hr_zones, target_pace_zones, expected_tss,
-                     description, coach_notes, is_completed, completed_workout_id, created_at"#,
+                     description, coach_notes, target_distance_km, is_completed,
+                     completed_workout_id, rpe, athlete_notes, actual_duration_min,
+                     completed_at, created_at"#,
     )
     .bind(input.mesocycle_id)
     .bind(input.user_id)
@@ -274,6 +283,7 @@ pub async fn create_planned_workout(
     .bind(input.expected_tss)
     .bind(&input.description)
     .bind(&input.coach_notes)
+    .bind(input.target_distance_km)
     .bind(&now)
     .fetch_one(pool)
     .await?;
@@ -291,8 +301,13 @@ pub async fn create_planned_workout(
         expected_tss: row.get("expected_tss"),
         description: row.get("description"),
         coach_notes: row.get("coach_notes"),
+        target_distance_km: row.get("target_distance_km"),
         is_completed: row.get("is_completed"),
         completed_workout_id: row.get("completed_workout_id"),
+        rpe: row.get("rpe"),
+        athlete_notes: row.get("athlete_notes"),
+        actual_duration_min: row.get("actual_duration_min"),
+        completed_at: row.get("completed_at"),
         created_at: row.get("created_at"),
     })
 }
@@ -305,7 +320,9 @@ pub async fn get_planned_workouts(
     let rows = sqlx::query(
         r#"SELECT id, mesocycle_id, user_id, scheduled_date, workout_type, duration_min,
                   duration_category, target_hr_zones, target_pace_zones, expected_tss,
-                  description, coach_notes, is_completed, completed_workout_id, created_at
+                  description, coach_notes, target_distance_km, is_completed,
+                  completed_workout_id, rpe, athlete_notes, actual_duration_min,
+                  completed_at, created_at
            FROM planned_workouts WHERE mesocycle_id = ?
            ORDER BY scheduled_date ASC"#,
     )
@@ -328,11 +345,222 @@ pub async fn get_planned_workouts(
             expected_tss: r.get("expected_tss"),
             description: r.get("description"),
             coach_notes: r.get("coach_notes"),
+            target_distance_km: r.get("target_distance_km"),
             is_completed: r.get("is_completed"),
             completed_workout_id: r.get("completed_workout_id"),
+            rpe: r.get("rpe"),
+            athlete_notes: r.get("athlete_notes"),
+            actual_duration_min: r.get("actual_duration_min"),
+            completed_at: r.get("completed_at"),
             created_at: r.get("created_at"),
         })
         .collect())
+}
+
+/// Mark a workout as completed with optional feedback (RPE, notes, actual duration).
+pub async fn complete_workout(
+    pool: &SqlitePool,
+    workout_id: i64,
+    user_id: i64,
+    rpe: Option<i64>,
+    athlete_notes: Option<&str>,
+    actual_duration_min: Option<i64>,
+) -> AppResult<PlannedWorkout> {
+    let now = Utc::now().to_rfc3339();
+
+    let row = sqlx::query(
+        r#"UPDATE planned_workouts
+           SET is_completed = 1, completed_at = ?, rpe = ?, athlete_notes = ?, actual_duration_min = ?
+           WHERE id = ? AND user_id = ?
+           RETURNING id, mesocycle_id, user_id, scheduled_date, workout_type, duration_min,
+                     duration_category, target_hr_zones, target_pace_zones, expected_tss,
+                     description, coach_notes, target_distance_km, is_completed,
+                     completed_workout_id, rpe, athlete_notes, actual_duration_min,
+                     completed_at, created_at"#,
+    )
+    .bind(&now)
+    .bind(rpe)
+    .bind(athlete_notes)
+    .bind(actual_duration_min)
+    .bind(workout_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    match row {
+        Some(r) => Ok(PlannedWorkout {
+            id: r.get("id"),
+            mesocycle_id: r.get("mesocycle_id"),
+            user_id: r.get("user_id"),
+            scheduled_date: r.get("scheduled_date"),
+            workout_type: r.get("workout_type"),
+            duration_min: r.get("duration_min"),
+            duration_category: r.get("duration_category"),
+            target_hr_zones: r.get("target_hr_zones"),
+            target_pace_zones: r.get("target_pace_zones"),
+            expected_tss: r.get("expected_tss"),
+            description: r.get("description"),
+            coach_notes: r.get("coach_notes"),
+            target_distance_km: r.get("target_distance_km"),
+            is_completed: r.get("is_completed"),
+            completed_workout_id: r.get("completed_workout_id"),
+            rpe: r.get("rpe"),
+            athlete_notes: r.get("athlete_notes"),
+            actual_duration_min: r.get("actual_duration_min"),
+            completed_at: r.get("completed_at"),
+            created_at: r.get("created_at"),
+        }),
+        None => Err(crate::error::AppError::NotFound(
+            "Workout not found or does not belong to user".to_string(),
+        )),
+    }
+}
+
+/// Get workouts from the previous mesocycle (by sequence_number) within the same macrocycle.
+/// Returns empty Vec if this is the first mesocycle.
+pub async fn get_previous_mesocycle_workouts(
+    pool: &SqlitePool,
+    user_id: i64,
+    current_mesocycle_id: i64,
+) -> AppResult<Vec<PlannedWorkout>> {
+    let rows = sqlx::query(
+        r#"SELECT pw.id, pw.mesocycle_id, pw.user_id, pw.scheduled_date, pw.workout_type,
+                  pw.duration_min, pw.duration_category, pw.target_hr_zones, pw.target_pace_zones,
+                  pw.expected_tss, pw.description, pw.coach_notes, pw.target_distance_km,
+                  pw.is_completed, pw.completed_workout_id, pw.rpe, pw.athlete_notes,
+                  pw.actual_duration_min, pw.completed_at, pw.created_at
+           FROM planned_workouts pw
+           JOIN mesocycles cur ON cur.id = ?
+           JOIN mesocycles prev ON prev.macrocycle_id = cur.macrocycle_id
+                               AND prev.sequence_number = cur.sequence_number - 1
+           WHERE pw.mesocycle_id = prev.id AND pw.user_id = ?
+           ORDER BY pw.scheduled_date ASC"#,
+    )
+    .bind(current_mesocycle_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| PlannedWorkout {
+            id: r.get("id"),
+            mesocycle_id: r.get("mesocycle_id"),
+            user_id: r.get("user_id"),
+            scheduled_date: r.get("scheduled_date"),
+            workout_type: r.get("workout_type"),
+            duration_min: r.get("duration_min"),
+            duration_category: r.get("duration_category"),
+            target_hr_zones: r.get("target_hr_zones"),
+            target_pace_zones: r.get("target_pace_zones"),
+            expected_tss: r.get("expected_tss"),
+            description: r.get("description"),
+            coach_notes: r.get("coach_notes"),
+            target_distance_km: r.get("target_distance_km"),
+            is_completed: r.get("is_completed"),
+            completed_workout_id: r.get("completed_workout_id"),
+            rpe: r.get("rpe"),
+            athlete_notes: r.get("athlete_notes"),
+            actual_duration_min: r.get("actual_duration_min"),
+            completed_at: r.get("completed_at"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MesocycleWithWorkouts {
+    #[serde(flatten)]
+    pub mesocycle: Mesocycle,
+    pub workouts: Vec<PlannedWorkout>,
+}
+
+/// Get the full plan: active macrocycle with all mesocycles and their workouts.
+pub async fn get_plan_with_all_workouts(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> AppResult<Option<(Macrocycle, Vec<MesocycleWithWorkouts>)>> {
+    let macrocycle = match get_current_macrocycle(pool, user_id).await? {
+        Some(mc) => mc,
+        None => return Ok(None),
+    };
+
+    let mesocycles = get_mesocycles(pool, macrocycle.id).await?;
+
+    let mut result = Vec::new();
+    for meso in mesocycles {
+        let workouts = get_planned_workouts(pool, meso.id).await?;
+        result.push(MesocycleWithWorkouts {
+            mesocycle: meso,
+            workouts,
+        });
+    }
+
+    Ok(Some((macrocycle, result)))
+}
+
+/// Minimal mesocycle context for workout detail view.
+#[derive(Debug, Clone, Serialize)]
+pub struct MesocycleContext {
+    pub id: i64,
+    pub phase: String,
+    pub focus: String,
+    pub sequence_number: i64,
+}
+
+/// Get a single workout with its mesocycle context. Verifies user ownership.
+pub async fn get_workout_with_context(
+    pool: &SqlitePool,
+    workout_id: i64,
+    user_id: i64,
+) -> AppResult<Option<(PlannedWorkout, MesocycleContext)>> {
+    let row = sqlx::query(
+        r#"SELECT pw.id, pw.mesocycle_id, pw.user_id, pw.scheduled_date, pw.workout_type,
+                  pw.duration_min, pw.duration_category, pw.target_hr_zones, pw.target_pace_zones,
+                  pw.expected_tss, pw.description, pw.coach_notes, pw.target_distance_km,
+                  pw.is_completed, pw.completed_workout_id, pw.rpe, pw.athlete_notes,
+                  pw.actual_duration_min, pw.completed_at, pw.created_at,
+                  m.id as meso_id, m.phase, m.focus, m.sequence_number
+           FROM planned_workouts pw
+           JOIN mesocycles m ON pw.mesocycle_id = m.id
+           WHERE pw.id = ? AND pw.user_id = ?"#,
+    )
+    .bind(workout_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| {
+        let workout = PlannedWorkout {
+            id: r.get("id"),
+            mesocycle_id: r.get("mesocycle_id"),
+            user_id: r.get("user_id"),
+            scheduled_date: r.get("scheduled_date"),
+            workout_type: r.get("workout_type"),
+            duration_min: r.get("duration_min"),
+            duration_category: r.get("duration_category"),
+            target_hr_zones: r.get("target_hr_zones"),
+            target_pace_zones: r.get("target_pace_zones"),
+            expected_tss: r.get("expected_tss"),
+            description: r.get("description"),
+            coach_notes: r.get("coach_notes"),
+            target_distance_km: r.get("target_distance_km"),
+            is_completed: r.get("is_completed"),
+            completed_workout_id: r.get("completed_workout_id"),
+            rpe: r.get("rpe"),
+            athlete_notes: r.get("athlete_notes"),
+            actual_duration_min: r.get("actual_duration_min"),
+            completed_at: r.get("completed_at"),
+            created_at: r.get("created_at"),
+        };
+        let context = MesocycleContext {
+            id: r.get("meso_id"),
+            phase: r.get("phase"),
+            focus: r.get("focus"),
+            sequence_number: r.get("sequence_number"),
+        };
+        (workout, context)
+    }))
 }
 
 /// Get the current active plan for a user: the active macrocycle and all its mesocycles.
@@ -622,6 +850,7 @@ mod tests {
             expected_tss: Some(35.0),
             description: Some("Easy recovery run, keep it conversational.".to_string()),
             coach_notes: Some("Focus on form, not pace.".to_string()),
+            target_distance_km: None,
         };
 
         let workout = create_planned_workout(&pool, &input)
@@ -639,6 +868,7 @@ mod tests {
         assert_eq!(workout.expected_tss, Some(35.0));
         assert_eq!(workout.is_completed, 0);
         assert!(workout.completed_workout_id.is_none());
+        assert!(workout.target_distance_km.is_none());
         assert!(workout.id > 0);
     }
 
@@ -662,6 +892,7 @@ mod tests {
             expected_tss: None,
             description: None,
             coach_notes: None,
+            target_distance_km: None,
         };
 
         let workout = create_planned_workout(&pool, &input)
@@ -671,6 +902,46 @@ mod tests {
         assert_eq!(workout.workout_type, "rest");
         assert!(workout.duration_min.is_none());
         assert!(workout.description.is_none());
+        assert!(workout.target_distance_km.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_planned_workout_with_distance() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        let input = CreatePlannedWorkout {
+            mesocycle_id: meso.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: Some("medium".to_string()),
+            target_hr_zones: Some("Z2".to_string()),
+            target_pace_zones: Some("Z1-Z2".to_string()),
+            expected_tss: Some(35.0),
+            description: Some("Easy recovery run.".to_string()),
+            coach_notes: Some("Keep it easy.".to_string()),
+            target_distance_km: Some(8.5),
+        };
+
+        let workout = create_planned_workout(&pool, &input)
+            .await
+            .expect("create workout with distance should succeed");
+
+        assert_eq!(workout.target_distance_km, Some(8.5));
+        assert_eq!(workout.workout_type, "easy_run");
+        assert_eq!(workout.duration_min, Some(45));
+
+        // Verify it persists correctly via get_planned_workouts
+        let workouts = get_planned_workouts(&pool, meso.id)
+            .await
+            .expect("get_planned_workouts should succeed");
+        assert_eq!(workouts.len(), 1);
+        assert_eq!(workouts[0].target_distance_km, Some(8.5));
     }
 
     #[tokio::test]
@@ -700,6 +971,7 @@ mod tests {
             expected_tss: Some(70.0),
             description: Some("Tempo at threshold pace.".to_string()),
             coach_notes: None,
+            target_distance_km: None,
         };
         create_planned_workout(&pool, &w2).await.expect("create w2");
 
@@ -715,6 +987,7 @@ mod tests {
             expected_tss: Some(30.0),
             description: None,
             coach_notes: None,
+            target_distance_km: None,
         };
         create_planned_workout(&pool, &w1).await.expect("create w1");
 
@@ -730,6 +1003,7 @@ mod tests {
             expected_tss: None,
             description: None,
             coach_notes: None,
+            target_distance_km: None,
         };
         create_planned_workout(&pool, &w3).await.expect("create w3");
 
@@ -805,5 +1079,311 @@ mod tests {
         assert_eq!(mesocycles.len(), 2);
         assert_eq!(mesocycles[0].sequence_number, 1);
         assert_eq!(mesocycles[1].sequence_number, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // complete_workout tests
+    // -----------------------------------------------------------------------
+
+    async fn create_test_workout(pool: &SqlitePool, mesocycle_id: i64, user_id: i64) -> PlannedWorkout {
+        let input = CreatePlannedWorkout {
+            mesocycle_id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: Some("medium".to_string()),
+            target_hr_zones: Some("Z2".to_string()),
+            target_pace_zones: Some("Z1-Z2".to_string()),
+            expected_tss: Some(35.0),
+            description: Some("Easy recovery run.".to_string()),
+            coach_notes: Some("Focus on form.".to_string()),
+            target_distance_km: None,
+        };
+        create_planned_workout(pool, &input)
+            .await
+            .expect("create test workout")
+    }
+
+    #[tokio::test]
+    async fn test_complete_workout_all_fields() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+        let workout = create_test_workout(&pool, meso.id, user_id).await;
+
+        let completed = complete_workout(
+            &pool,
+            workout.id,
+            user_id,
+            Some(7),
+            Some("felt strong"),
+            Some(48),
+        )
+        .await
+        .expect("complete_workout should succeed");
+
+        assert_eq!(completed.id, workout.id);
+        assert_eq!(completed.is_completed, 1);
+        assert_eq!(completed.rpe, Some(7));
+        assert_eq!(completed.athlete_notes.as_deref(), Some("felt strong"));
+        assert_eq!(completed.actual_duration_min, Some(48));
+        assert!(completed.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_complete_workout_no_optional_fields() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+        let workout = create_test_workout(&pool, meso.id, user_id).await;
+
+        let completed = complete_workout(&pool, workout.id, user_id, None, None, None)
+            .await
+            .expect("complete_workout should succeed");
+
+        assert_eq!(completed.is_completed, 1);
+        assert!(completed.rpe.is_none());
+        assert!(completed.athlete_notes.is_none());
+        assert!(completed.actual_duration_min.is_none());
+        assert!(completed.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_complete_workout_wrong_user() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+        let workout = create_test_workout(&pool, meso.id, user_id).await;
+
+        let result = complete_workout(&pool, workout.id, 99999, Some(5), None, None).await;
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_previous_mesocycle_workouts tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_previous_mesocycle_workouts_first_mesocycle() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        // First mesocycle — no previous
+        let result = get_previous_mesocycle_workouts(&pool, user_id, meso.id)
+            .await
+            .expect("should not error");
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_previous_mesocycle_workouts_returns_previous() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+
+        // Create mesocycle 1 with workouts
+        let meso1 = create_test_mesocycle(&pool, mc.id).await;
+        let _w1 = create_test_workout(&pool, meso1.id, user_id).await;
+
+        let w2_input = CreatePlannedWorkout {
+            mesocycle_id: meso1.id,
+            user_id,
+            scheduled_date: "2026-03-04".to_string(),
+            workout_type: "rest".to_string(),
+            duration_min: None,
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: None,
+            description: None,
+            coach_notes: None,
+            target_distance_km: None,
+        };
+        create_planned_workout(&pool, &w2_input).await.expect("create w2");
+
+        // Create mesocycle 2
+        let meso2_input = CreateMesocycle {
+            macrocycle_id: mc.id,
+            sequence_number: 2,
+            phase: "utilization".to_string(),
+            focus: "aerobic_utilization".to_string(),
+            load_weeks: 3,
+            recovery_weeks: 1,
+            target_volume_km: Some(50.0),
+            start_date: "2026-03-29".to_string(),
+            end_date: "2026-04-25".to_string(),
+        };
+        let meso2 = create_mesocycle(&pool, &meso2_input).await.expect("create meso2");
+
+        // Get previous workouts for meso2 — should be meso1's workouts
+        let prev = get_previous_mesocycle_workouts(&pool, user_id, meso2.id)
+            .await
+            .expect("should not error");
+        assert_eq!(prev.len(), 2);
+        assert_eq!(prev[0].scheduled_date, "2026-03-03");
+        assert_eq!(prev[1].scheduled_date, "2026-03-04");
+    }
+
+    // -----------------------------------------------------------------------
+    // get_plan_with_all_workouts tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_plan_with_all_workouts() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso1 = create_test_mesocycle(&pool, mc.id).await;
+
+        // Create a second mesocycle
+        let input2 = CreateMesocycle {
+            macrocycle_id: mc.id,
+            sequence_number: 2,
+            phase: "utilization".to_string(),
+            focus: "aerobic_utilization".to_string(),
+            load_weeks: 2,
+            recovery_weeks: 1,
+            target_volume_km: Some(140.0),
+            start_date: "2026-03-29".to_string(),
+            end_date: "2026-04-18".to_string(),
+        };
+        let meso2 = create_mesocycle(&pool, &input2).await.expect("create meso2");
+
+        // Add workouts to both
+        let w1 = CreatePlannedWorkout {
+            mesocycle_id: meso1.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: Some(8.0),
+        };
+        create_planned_workout(&pool, &w1).await.expect("w1");
+
+        let w2 = CreatePlannedWorkout {
+            mesocycle_id: meso2.id,
+            user_id,
+            scheduled_date: "2026-04-01".to_string(),
+            workout_type: "tempo_run".to_string(),
+            duration_min: Some(50),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(70.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: Some(10.0),
+        };
+        create_planned_workout(&pool, &w2).await.expect("w2");
+
+        let result = get_plan_with_all_workouts(&pool, user_id)
+            .await
+            .expect("should not error")
+            .expect("should find plan");
+
+        let (found_mc, meso_with_workouts) = result;
+        assert_eq!(found_mc.id, mc.id);
+        assert_eq!(meso_with_workouts.len(), 2);
+        assert_eq!(meso_with_workouts[0].workouts.len(), 1);
+        assert_eq!(meso_with_workouts[0].workouts[0].workout_type, "easy_run");
+        assert_eq!(meso_with_workouts[1].workouts.len(), 1);
+        assert_eq!(meso_with_workouts[1].workouts[0].workout_type, "tempo_run");
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_with_all_workouts_no_plan() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let result = get_plan_with_all_workouts(&pool, user_id)
+            .await
+            .expect("should not error");
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // get_workout_with_context tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_workout_with_context() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        let w = CreatePlannedWorkout {
+            mesocycle_id: meso.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: None,
+        };
+        let workout = create_planned_workout(&pool, &w).await.expect("create");
+
+        let (found, ctx) = get_workout_with_context(&pool, workout.id, user_id)
+            .await
+            .expect("ok")
+            .expect("found");
+        assert_eq!(found.id, workout.id);
+        assert_eq!(ctx.phase, "capacity");
+        assert_eq!(ctx.focus, "aerobic_capacity");
+        assert_eq!(ctx.sequence_number, 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_workout_with_context_wrong_user() {
+        let pool = setup_pool().await;
+        let user_id = create_test_user(&pool).await;
+        let race_goal_id = create_test_race_goal(&pool, user_id).await;
+        let mc = create_test_macrocycle(&pool, user_id, race_goal_id).await;
+        let meso = create_test_mesocycle(&pool, mc.id).await;
+
+        let w = CreatePlannedWorkout {
+            mesocycle_id: meso.id,
+            user_id,
+            scheduled_date: "2026-03-03".to_string(),
+            workout_type: "easy_run".to_string(),
+            duration_min: Some(45),
+            duration_category: None,
+            target_hr_zones: None,
+            target_pace_zones: None,
+            expected_tss: Some(35.0),
+            description: None,
+            coach_notes: None,
+            target_distance_km: None,
+        };
+        let workout = create_planned_workout(&pool, &w).await.expect("create");
+
+        // Wrong user_id should return None
+        let result = get_workout_with_context(&pool, workout.id, 99999)
+            .await
+            .expect("ok");
+        assert!(result.is_none());
     }
 }

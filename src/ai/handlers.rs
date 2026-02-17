@@ -5,8 +5,11 @@ use sqlx::sqlite::SqlitePool;
 use tracing::{info, warn};
 
 use crate::ai::client::{ClaudeClient, ClaudeError, Message, Model};
-use crate::ai::context::{build_macrocycle_context, build_mesocycle_context};
-use crate::ai::prompts::COACH_JAN_SYSTEM_PROMPT;
+use crate::ai::context::{
+    build_macrocycle_context, build_mesocycle_context, format_workout_history_detailed,
+    format_workout_history_summary,
+};
+use crate::ai::prompts::coach_jan_system_prompt;
 use crate::ai::tools::{
     add_coach_notes_tool, generate_macrocycle_skeleton_tool, generate_mesocycle_plan_tool,
 };
@@ -88,6 +91,7 @@ struct ClaudeDay {
     date: String,
     workout_type: String,
     duration_category: Option<String>,
+    target_distance_km: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +114,7 @@ struct ClaudeWorkoutNote {
 /// Call Claude to generate a macrocycle skeleton (high-level periodization).
 pub async fn generate_skeleton(
     client: &ClaudeClient,
+    pool: &SqlitePool,
     profile: &AthleteProfile,
     race_goal: &RaceGoal,
     ctl: f64,
@@ -120,7 +125,15 @@ pub async fn generate_skeleton(
     })?;
     let weeks_until_race = (race_date - today).num_weeks();
 
-    let context = build_macrocycle_context(profile, race_goal, ctl, weeks_until_race);
+    // Fetch workout history from previous mesocycle (if any active plan exists)
+    let workout_history = fetch_workout_history_summary(pool, profile.user_id).await?;
+    let context = build_macrocycle_context(
+        profile,
+        race_goal,
+        ctl,
+        weeks_until_race,
+        workout_history.as_deref(),
+    );
     let messages = vec![Message::user(&context)];
     let tools = vec![generate_macrocycle_skeleton_tool()];
 
@@ -132,7 +145,7 @@ pub async fn generate_skeleton(
     let response = client
         .send(
             Model::Sonnet,
-            Some(COACH_JAN_SYSTEM_PROMPT),
+            Some(&coach_jan_system_prompt()),
             messages,
             tools,
             4096,
@@ -232,10 +245,14 @@ pub async fn confirm_and_generate_plan(
         macrocycle.id
     );
 
-    // --- Step 2: Generate first mesocycle day-by-day plan ---
+    // --- Step 2: Fetch workout history from previous mesocycle ---
     let first_meso = &db_mesocycles[0];
     let first_skel = &skeleton.mesocycles[0];
 
+    let workout_history = fetch_workout_history_detailed(pool, user_id, first_meso.id).await?;
+    let history_ref = workout_history.as_deref();
+
+    // --- Step 3: Generate first mesocycle day-by-day plan ---
     let mesocycle_plan = generate_mesocycle_workouts(
         client,
         profile,
@@ -247,10 +264,11 @@ pub async fn confirm_and_generate_plan(
         &first_meso.end_date,
         first_skel.target_volume_km,
         ctl,
+        history_ref,
     )
     .await?;
 
-    // --- Step 3: Fill details from workout registry ---
+    // --- Step 4: Fill details from workout registry ---
     let hr_zones = calculate_hr_zones(profile.lthr as u16);
     let pace_zones = profile
         .ftpace_m_per_s
@@ -262,12 +280,13 @@ pub async fn confirm_and_generate_plan(
         pace_zones.as_ref(),
     )?;
 
-    // --- Step 4: Add coach notes ---
+    // --- Step 5: Add coach notes ---
     let coach_notes = generate_coach_notes(
         client,
         profile,
         &first_meso.phase,
         &mesocycle_plan,
+        history_ref,
     )
     .await?;
 
@@ -336,6 +355,7 @@ pub async fn confirm_and_generate_plan(
                     &first_meso.end_date,
                     first_skel.target_volume_km,
                     ctl,
+                    history_ref,
                 )
                 .await?;
 
@@ -382,6 +402,7 @@ pub async fn confirm_and_generate_plan(
                     profile,
                     &first_meso.phase,
                     &retry_plan,
+                    history_ref,
                 )
                 .await?;
 
@@ -478,6 +499,7 @@ async fn generate_mesocycle_workouts(
     end_date: &str,
     target_volume_km: f64,
     ctl: f64,
+    workout_history: Option<&str>,
 ) -> Result<ClaudeMesocyclePlan, PlanError> {
     let context = build_mesocycle_context(
         profile,
@@ -489,6 +511,7 @@ async fn generate_mesocycle_workouts(
         end_date,
         target_volume_km,
         ctl,
+        workout_history,
     );
 
     let messages = vec![Message::user(&context)];
@@ -497,7 +520,7 @@ async fn generate_mesocycle_workouts(
     let response = client
         .send(
             Model::Sonnet,
-            Some(COACH_JAN_SYSTEM_PROMPT),
+            Some(&coach_jan_system_prompt()),
             messages,
             tools,
             8192,
@@ -531,6 +554,7 @@ async fn generate_coach_notes(
     profile: &AthleteProfile,
     phase: &str,
     plan: &ClaudeMesocyclePlan,
+    workout_history: Option<&str>,
 ) -> Result<ClaudeCoachNotes, PlanError> {
     // Build a summary of the workouts for Claude to add notes to
     let mut workout_summary = String::new();
@@ -549,6 +573,11 @@ async fn generate_coach_notes(
         }
     }
 
+    let history_section = match workout_history {
+        Some(h) if !h.is_empty() => format!("\n\nPrevious mesocycle context:\n{}\n\nReference this history when writing notes — acknowledge progression from previous mesocycle.", h),
+        _ => String::new(),
+    };
+
     let prompt = format!(
         r#"Add personalized coaching notes for this {} phase mesocycle plan.
 
@@ -557,7 +586,7 @@ Athlete: {} ({} level, CTL ~{})
 Mesocycle overview: {}
 
 Workout schedule:
-{}
+{}{}
 
 For each workout, provide a brief coaching note (1-2 sentences) explaining purpose,
 key execution cues, or what to focus on. Use "we" language."#,
@@ -567,6 +596,7 @@ key execution cues, or what to focus on. Use "we" language."#,
         profile.current_weekly_volume_km,
         plan.mesocycle_overview,
         workout_summary,
+        history_section,
     );
 
     let messages = vec![Message::user(&prompt)];
@@ -575,7 +605,7 @@ key execution cues, or what to focus on. Use "we" language."#,
     let response = client
         .send(
             Model::Sonnet,
-            Some(COACH_JAN_SYSTEM_PROMPT),
+            Some(&coach_jan_system_prompt()),
             messages,
             tools,
             8192,
@@ -617,6 +647,7 @@ pub struct FilledWorkout {
     pub target_pace_zones: Vec<u8>,
     pub hr_zone_display: Option<String>,
     pub expected_tss: f64,
+    pub target_distance_km: Option<f64>,
 }
 
 pub(crate) fn fill_workouts_from_registry(
@@ -648,6 +679,7 @@ pub(crate) fn fill_workouts_from_registry(
                     target_pace_zones: vec![],
                     hr_zone_display: None,
                     expected_tss: 0.0,
+                    target_distance_km: None,
                 });
                 continue;
             }
@@ -670,6 +702,7 @@ pub(crate) fn fill_workouts_from_registry(
                     target_pace_zones: vec![],
                     hr_zone_display: None,
                     expected_tss: DEFAULT_STRENGTH_TSS,
+                    target_distance_km: None,
                 });
                 continue;
             }
@@ -696,6 +729,7 @@ pub(crate) fn fill_workouts_from_registry(
                 target_pace_zones: resolved.target_pace_zones,
                 hr_zone_display: Some(resolved.hr_zone_display),
                 expected_tss: resolved.expected_tss,
+                target_distance_km: day.target_distance_km,
             });
         }
     }
@@ -819,6 +853,7 @@ async fn persist_workouts(
                     expected_tss: Some(f.expected_tss),
                     description: f.description.clone(),
                     coach_notes,
+                    target_distance_km: f.target_distance_km,
                 },
             )
             .await?;
@@ -845,6 +880,96 @@ pub(crate) fn parse_mesocycle_plan(input: &Value) -> Result<ClaudeMesocyclePlan,
     serde_json::from_value(input.clone()).map_err(|e| {
         PlanError::InvalidResponse(format!("Failed to parse mesocycle plan: {}", e))
     })
+}
+
+// ---------------------------------------------------------------------------
+// Helper: fetch workout history for AI context
+// ---------------------------------------------------------------------------
+
+/// Fetch detailed workout history from the previous mesocycle for AI context.
+/// Returns None if this is the first mesocycle or no previous workouts exist.
+async fn fetch_workout_history_detailed(
+    pool: &SqlitePool,
+    user_id: i64,
+    current_mesocycle_id: i64,
+) -> Result<Option<String>, PlanError> {
+    let prev_workouts =
+        plans::get_previous_mesocycle_workouts(pool, user_id, current_mesocycle_id).await?;
+
+    if prev_workouts.is_empty() {
+        return Ok(None);
+    }
+
+    // Look up the previous mesocycle's metadata for formatting
+    let prev_meso_id = prev_workouts[0].mesocycle_id;
+    let prev_meso_row = sqlx::query(
+        "SELECT phase, focus, load_weeks, recovery_weeks FROM mesocycles WHERE id = ?",
+    )
+    .bind(prev_meso_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| PlanError::Database(crate::error::AppError::Database(e)))?;
+
+    match prev_meso_row {
+        Some(row) => {
+            use sqlx::Row;
+            let phase: String = row.get("phase");
+            let focus: String = row.get("focus");
+            let load_weeks: i64 = row.get("load_weeks");
+            let recovery_weeks: i64 = row.get("recovery_weeks");
+            let total = load_weeks + recovery_weeks;
+            Ok(Some(format_workout_history_detailed(
+                &prev_workouts,
+                &phase,
+                &focus,
+                total,
+            )))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Fetch summary workout history for macrocycle skeleton generation.
+/// Uses the most recent mesocycle from the current active macrocycle.
+async fn fetch_workout_history_summary(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Option<String>, PlanError> {
+    // Find the current active macrocycle and its last mesocycle with workouts
+    let row = sqlx::query(
+        r#"SELECT m.id as meso_id, m.phase, m.focus, m.load_weeks, m.recovery_weeks
+           FROM mesocycles m
+           JOIN macrocycles mc ON m.macrocycle_id = mc.id
+           WHERE mc.user_id = ? AND mc.status = 'active'
+           ORDER BY m.sequence_number DESC
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| PlanError::Database(crate::error::AppError::Database(e)))?;
+
+    match row {
+        Some(row) => {
+            use sqlx::Row;
+            let meso_id: i64 = row.get("meso_id");
+            let phase: String = row.get("phase");
+            let focus: String = row.get("focus");
+            let load_weeks: i64 = row.get("load_weeks");
+            let recovery_weeks: i64 = row.get("recovery_weeks");
+            let total = load_weeks + recovery_weeks;
+
+            let workouts = plans::get_planned_workouts(pool, meso_id).await?;
+            if workouts.is_empty() {
+                return Ok(None);
+            }
+
+            Ok(Some(format_workout_history_summary(
+                &workouts, &phase, &focus, total,
+            )))
+        }
+        None => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1137,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "easy_run".to_string(),
                 duration_category: Some("medium".to_string()),
+                target_distance_km: Some(8.0),
             }],
         }];
 
@@ -1025,6 +1151,7 @@ mod tests {
         assert!(filled[0].expected_tss > 0.0);
         assert!(filled[0].structure.as_ref().unwrap().contains("Zone 1-2"));
         assert!(filled[0].hr_zone_display.is_some());
+        assert_eq!(filled[0].target_distance_km, Some(8.0));
     }
 
     #[test]
@@ -1038,6 +1165,7 @@ mod tests {
                 date: "2026-03-04".to_string(),
                 workout_type: "rest".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1062,6 +1190,7 @@ mod tests {
                 date: "2026-03-05".to_string(),
                 workout_type: "strength_precision".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1085,6 +1214,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "nonexistent_workout".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1136,6 +1266,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "easy_run".to_string(),
                 duration_category: None, // missing
+                target_distance_km: None,
             }],
         }];
 
@@ -1348,6 +1479,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "tempo_run".to_string(),
                 duration_category: Some("short".to_string()),
+                target_distance_km: Some(6.0),
             }],
         }];
 
@@ -1401,6 +1533,7 @@ mod tests {
                 date: "2026-03-23".to_string(),
                 workout_type: "rest".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 

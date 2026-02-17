@@ -57,7 +57,7 @@ async fn test_real_claude_plan_generation() {
     let weeks_until_race = 20; // ~5 months out
 
     // Build context
-    let context = build_macrocycle_context(&profile, &race_goal, ctl, weeks_until_race);
+    let context = build_macrocycle_context(&profile, &race_goal, ctl, weeks_until_race, None);
     let system_prompt = coach_jan_system_prompt();
     let tool = generate_macrocycle_skeleton_tool();
 
