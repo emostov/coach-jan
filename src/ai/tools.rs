@@ -101,6 +101,10 @@ pub fn generate_mesocycle_plan_tool() -> Tool {
                                             "type": "string",
                                             "enum": ["short", "medium", "long"],
                                             "description": "Required for running workouts, omit for rest"
+                                        },
+                                        "target_distance_km": {
+                                            "type": "number",
+                                            "description": "Target distance in kilometers for this workout. Required for running workouts, omit for rest/strength."
                                         }
                                     },
                                     "required": ["date", "workout_type"]

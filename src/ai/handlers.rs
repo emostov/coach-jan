@@ -91,6 +91,7 @@ struct ClaudeDay {
     date: String,
     workout_type: String,
     duration_category: Option<String>,
+    target_distance_km: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -646,6 +647,7 @@ pub struct FilledWorkout {
     pub target_pace_zones: Vec<u8>,
     pub hr_zone_display: Option<String>,
     pub expected_tss: f64,
+    pub target_distance_km: Option<f64>,
 }
 
 pub(crate) fn fill_workouts_from_registry(
@@ -677,6 +679,7 @@ pub(crate) fn fill_workouts_from_registry(
                     target_pace_zones: vec![],
                     hr_zone_display: None,
                     expected_tss: 0.0,
+                    target_distance_km: None,
                 });
                 continue;
             }
@@ -699,6 +702,7 @@ pub(crate) fn fill_workouts_from_registry(
                     target_pace_zones: vec![],
                     hr_zone_display: None,
                     expected_tss: DEFAULT_STRENGTH_TSS,
+                    target_distance_km: None,
                 });
                 continue;
             }
@@ -725,6 +729,7 @@ pub(crate) fn fill_workouts_from_registry(
                 target_pace_zones: resolved.target_pace_zones,
                 hr_zone_display: Some(resolved.hr_zone_display),
                 expected_tss: resolved.expected_tss,
+                target_distance_km: day.target_distance_km,
             });
         }
     }
@@ -848,7 +853,7 @@ async fn persist_workouts(
                     expected_tss: Some(f.expected_tss),
                     description: f.description.clone(),
                     coach_notes,
-                    target_distance_km: None,
+                    target_distance_km: f.target_distance_km,
                 },
             )
             .await?;
@@ -1132,6 +1137,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "easy_run".to_string(),
                 duration_category: Some("medium".to_string()),
+                target_distance_km: Some(8.0),
             }],
         }];
 
@@ -1145,6 +1151,7 @@ mod tests {
         assert!(filled[0].expected_tss > 0.0);
         assert!(filled[0].structure.as_ref().unwrap().contains("Zone 1-2"));
         assert!(filled[0].hr_zone_display.is_some());
+        assert_eq!(filled[0].target_distance_km, Some(8.0));
     }
 
     #[test]
@@ -1158,6 +1165,7 @@ mod tests {
                 date: "2026-03-04".to_string(),
                 workout_type: "rest".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1182,6 +1190,7 @@ mod tests {
                 date: "2026-03-05".to_string(),
                 workout_type: "strength_precision".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1205,6 +1214,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "nonexistent_workout".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
@@ -1256,6 +1266,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "easy_run".to_string(),
                 duration_category: None, // missing
+                target_distance_km: None,
             }],
         }];
 
@@ -1468,6 +1479,7 @@ mod tests {
                 date: "2026-03-02".to_string(),
                 workout_type: "tempo_run".to_string(),
                 duration_category: Some("short".to_string()),
+                target_distance_km: Some(6.0),
             }],
         }];
 
@@ -1521,6 +1533,7 @@ mod tests {
                 date: "2026-03-23".to_string(),
                 workout_type: "rest".to_string(),
                 duration_category: None,
+                target_distance_km: None,
             }],
         }];
 
