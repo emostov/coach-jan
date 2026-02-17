@@ -10,7 +10,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', path: '/', icon: '\u25A0' },
-  { label: 'Plan', path: '/plan', icon: '\u25B6', disabled: true },
+  { label: 'Plan', path: '/plan', icon: '\u25B6' },
   { label: 'Performance', path: '/performance', icon: '\u25B2', disabled: true },
   { label: 'Chat', path: '/chat', icon: '\u25CF', disabled: true },
   { label: 'Profile', path: '/profile', icon: '\u25CB' },

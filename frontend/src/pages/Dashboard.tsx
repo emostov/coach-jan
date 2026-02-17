@@ -4,8 +4,8 @@ import { useProfile } from '../hooks/useAthlete';
 import { useCurrentPlan } from '../hooks/usePlan';
 import { useAuthStore } from '../hooks/useAuth';
 import { getWorkoutBorderColor } from '../utils/workoutColors';
-import { formatWorkoutType, formatPhase } from '../utils/planHelpers';
-import type { RaceGoal, PlannedWorkout, Mesocycle } from '../api/types';
+import { formatWorkoutType, getTodaysWorkout, getWeekWorkouts, getWeekSummary, getMesocycleForDate, getWeekOfMesocycle, getAllWorkouts } from '../utils/planHelpers';
+import type { RaceGoal, PlanResponse } from '../api/types';
 
 export default function Dashboard() {
   const user = useAuthStore((s) => s.user);
@@ -17,16 +17,6 @@ export default function Dashboard() {
   const athleteName = profile?.name?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'Athlete';
 
   const macrocycle = planData?.macrocycle ?? null;
-  const mesocycles = planData?.mesocycles ?? [];
-
-  // Find the current mesocycle (first one whose end_date is in the future)
-  const today = new Date();
-  const currentMesocycle = mesocycles.find((m) => parseISO(m.end_date) >= today) ?? mesocycles[0] ?? null;
-
-  // Get workouts from the current mesocycle
-  const currentWorkouts = currentMesocycle
-    ? [...currentMesocycle.workouts].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
-    : [];
 
   return (
     <div className="space-y-6">
@@ -43,13 +33,17 @@ export default function Dashboard() {
       {/* Race countdown */}
       <RaceCountdown raceGoal={raceGoal} />
 
-      {/* Training plan */}
-      <TrainingPlanCard
-        currentMesocycle={currentMesocycle}
-        workouts={currentWorkouts}
-        isLoading={planLoading}
-        isError={planError}
-      />
+      {/* Phase banner */}
+      {planData && <PhaseBanner plan={planData} />}
+
+      {/* Today's workout hero */}
+      <TodaysWorkoutCard plan={planData ?? null} isLoading={planLoading} isError={planError} />
+
+      {/* Weekly progress */}
+      {planData && <WeeklyProgressBar plan={planData} />}
+
+      {/* Metrics placeholder */}
+      <MetricsPlaceholder />
 
       {/* Quick links */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -136,25 +130,38 @@ function RaceCountdown({ raceGoal }: { raceGoal: RaceGoal | null }) {
   );
 }
 
-// --- Training Plan Card ---
+// --- Phase Banner ---
 
-interface TrainingPlanCardProps {
-  currentMesocycle: Mesocycle | null;
-  workouts: PlannedWorkout[];
-  isLoading: boolean;
-  isError: boolean;
+function PhaseBanner({ plan }: { plan: PlanResponse }) {
+  const today = new Date();
+  const currentMeso = getMesocycleForDate(plan, today);
+  if (!currentMeso) return null;
+
+  const weekNum = getWeekOfMesocycle(currentMeso, today);
+  const totalWeeks = currentMeso.load_weeks + currentMeso.recovery_weeks;
+
+  return (
+    <div className="rounded-xl bg-white border border-cream-dark px-5 py-3">
+      <p className="text-sm text-charcoal">
+        <span className="font-medium">Mesocycle {currentMeso.sequence_number}</span>
+        {' — '}
+        {formatWorkoutType(currentMeso.focus)}
+        <span className="text-slate ml-2">Week {weekNum} of {totalWeeks}</span>
+      </p>
+    </div>
+  );
 }
 
-function TrainingPlanCard({ currentMesocycle, workouts, isLoading, isError }: TrainingPlanCardProps) {
+// --- Today's Workout Card ---
+
+function TodaysWorkoutCard({ plan, isLoading, isError }: { plan: PlanResponse | null; isLoading: boolean; isError: boolean }) {
   // Loading state
   if (isLoading) {
     return (
       <div className="rounded-xl bg-white border border-cream-dark p-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-forest/10 flex items-center justify-center flex-shrink-0">
-            <CalendarIcon />
-          </div>
-          <h2 className="font-serif text-xl text-charcoal font-semibold">Your Training Plan</h2>
+          <CalendarIcon />
+          <h2 className="font-serif text-xl text-charcoal font-semibold">Today</h2>
         </div>
         <p className="text-slate mt-4 text-sm">Loading your plan...</p>
       </div>
@@ -162,15 +169,13 @@ function TrainingPlanCard({ currentMesocycle, workouts, isLoading, isError }: Tr
   }
 
   // No plan / error state
-  if (isError || !currentMesocycle || workouts.length === 0) {
+  if (isError || !plan) {
     return (
       <div className="rounded-xl bg-white border border-cream-dark p-6">
         <div className="flex items-start gap-4">
-          <div className="w-10 h-10 rounded-lg bg-forest/10 flex items-center justify-center flex-shrink-0">
-            <CalendarIcon />
-          </div>
+          <CalendarIcon />
           <div>
-            <h2 className="font-serif text-xl text-charcoal font-semibold">Your Training Plan</h2>
+            <h2 className="font-serif text-xl text-charcoal font-semibold">Today</h2>
             <p className="text-slate mt-1 text-sm leading-relaxed">
               No training plan yet. Once you create a profile with a race goal, you can generate
               your personalized training plan from the Plan page.
@@ -187,75 +192,148 @@ function TrainingPlanCard({ currentMesocycle, workouts, isLoading, isError }: Tr
     );
   }
 
-  // Phase display
-  const phaseLabel = formatPhase(currentMesocycle.phase);
-  const focusLabel = currentMesocycle.focus ? ` \u2014 ${formatWorkoutType(currentMesocycle.focus)}` : '';
+  const today = new Date();
+  const todaysWorkout = getTodaysWorkout(plan);
+
+  // Rest day
+  if (todaysWorkout && todaysWorkout.workout_type === 'rest') {
+    return (
+      <div className="rounded-xl bg-white border border-cream-dark p-6">
+        <div className="flex items-center gap-3 mb-2">
+          <CalendarIcon />
+          <h2 className="font-serif text-xl text-charcoal font-semibold">Today</h2>
+        </div>
+        <div className="text-center py-4">
+          <p className="font-serif text-2xl text-charcoal font-bold">Rest Day</p>
+          <p className="text-slate text-sm mt-1">Recovery is training too.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Active workout today
+  if (todaysWorkout) {
+    const borderColor = getWorkoutBorderColor(todaysWorkout.workout_type);
+    return (
+      <div className="rounded-xl bg-white border border-cream-dark p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <CalendarIcon />
+            <h2 className="font-serif text-xl text-charcoal font-semibold">Today</h2>
+          </div>
+          <Link to="/plan" className="text-xs font-medium text-forest hover:text-forest-light transition-colors">
+            View full plan &rarr;
+          </Link>
+        </div>
+        <div style={{ borderLeft: `4px solid ${borderColor}`, paddingLeft: '16px' }}>
+          <p className="font-serif text-2xl text-charcoal font-bold">
+            {formatWorkoutType(todaysWorkout.workout_type)}
+          </p>
+          <div className="flex items-center gap-3 mt-2 text-sm text-slate">
+            {todaysWorkout.duration_min && <span>{todaysWorkout.duration_min} min</span>}
+            {todaysWorkout.target_distance_km != null && <span>{todaysWorkout.target_distance_km} km</span>}
+            {todaysWorkout.expected_tss != null && <span>{Math.round(todaysWorkout.expected_tss)} TSS</span>}
+          </div>
+          {todaysWorkout.target_hr_zones && (
+            <p className="text-xs text-slate mt-1">HR: {todaysWorkout.target_hr_zones}</p>
+          )}
+          {todaysWorkout.description && (
+            <p className="text-sm text-charcoal mt-3 leading-relaxed">{todaysWorkout.description}</p>
+          )}
+          {todaysWorkout.coach_notes && (
+            <div className="mt-3 rounded-lg bg-forest/5 border border-forest/10 p-3">
+              <p className="text-xs text-charcoal leading-relaxed">
+                <span className="font-medium">Coach Jan:</span> {todaysWorkout.coach_notes}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // No workout today — show next upcoming
+  const allWorkouts = getAllWorkouts(plan);
+  const nextWorkout = allWorkouts
+    .filter(w => parseISO(w.scheduled_date) > today && w.workout_type !== 'rest')
+    .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))[0];
 
   return (
     <div className="rounded-xl bg-white border border-cream-dark p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-forest/10 flex items-center justify-center flex-shrink-0">
-            <CalendarIcon />
-          </div>
-          <div>
-            <h2 className="font-serif text-xl text-charcoal font-semibold">Your Training Plan</h2>
-            <p className="text-slate text-xs mt-0.5">
-              {phaseLabel}{focusLabel}
-            </p>
-          </div>
+          <CalendarIcon />
+          <h2 className="font-serif text-xl text-charcoal font-semibold">Today</h2>
         </div>
-        <Link
-          to="/plan"
-          className="text-xs font-medium text-forest hover:text-forest-light transition-colors"
-        >
-          View full plan
+        <Link to="/plan" className="text-xs font-medium text-forest hover:text-forest-light transition-colors">
+          View full plan &rarr;
         </Link>
       </div>
+      {nextWorkout ? (
+        <div>
+          <p className="text-xs text-slate uppercase tracking-wider mb-1">
+            Next up: {format(parseISO(nextWorkout.scheduled_date), 'EEEE')}
+          </p>
+          <p className="font-serif text-xl text-charcoal font-bold">
+            {formatWorkoutType(nextWorkout.workout_type)}
+          </p>
+          <div className="flex items-center gap-3 mt-1 text-sm text-slate">
+            {nextWorkout.duration_min && <span>{nextWorkout.duration_min} min</span>}
+          </div>
+        </div>
+      ) : (
+        <p className="text-slate text-sm">No upcoming workouts scheduled.</p>
+      )}
+    </div>
+  );
+}
 
-      <div className="space-y-1">
-        {workouts.map((w) => (
-          <WorkoutRow key={w.id} workout={w} />
-        ))}
+// --- Weekly Progress Bar ---
+
+function WeeklyProgressBar({ plan }: { plan: PlanResponse }) {
+  const today = new Date();
+  const weekWorkouts = getWeekWorkouts(plan, today);
+  const { targetKm, targetTss, totalSessions, completedSessions } = getWeekSummary(weekWorkouts);
+
+  if (weekWorkouts.length === 0) return null;
+
+  return (
+    <div className="rounded-xl bg-white border border-cream-dark p-5">
+      <h3 className="text-xs font-medium text-slate uppercase tracking-wider mb-3">This Week</h3>
+      <div className="grid grid-cols-3 gap-4 text-center">
+        {targetKm > 0 && (
+          <div>
+            <p className="text-lg font-bold text-charcoal">{targetKm.toFixed(1)}</p>
+            <p className="text-[10px] text-slate uppercase">km planned</p>
+          </div>
+        )}
+        {targetTss > 0 && (
+          <div>
+            <p className="text-lg font-bold text-charcoal">{Math.round(targetTss)}</p>
+            <p className="text-[10px] text-slate uppercase">TSS planned</p>
+          </div>
+        )}
+        <div>
+          <p className="text-lg font-bold text-charcoal">{completedSessions}/{totalSessions}</p>
+          <p className="text-[10px] text-slate uppercase">sessions</p>
+        </div>
       </div>
     </div>
   );
 }
 
-function WorkoutRow({ workout }: { workout: PlannedWorkout }) {
-  const borderColor = getWorkoutBorderColor(workout.workout_type);
-  const date = parseISO(workout.scheduled_date);
-  const dayLabel = format(date, 'EEE');
-  const dateLabel = format(date, 'MMM d');
-  const typeLabel = formatWorkoutType(workout.workout_type);
-  const durationLabel = workout.duration_min ? `${workout.duration_min} min` : null;
+// --- Metrics Placeholder ---
 
+function MetricsPlaceholder() {
   return (
-    <div
-      className="flex items-start gap-3 py-2.5 px-3 rounded-lg hover:bg-cream/50 transition-colors"
-      style={{ borderLeft: `3px solid ${borderColor}` }}
-    >
-      <div className="w-14 flex-shrink-0 text-center">
-        <p className="text-xs font-medium text-charcoal">{dayLabel}</p>
-        <p className="text-[11px] text-slate-light">{dateLabel}</p>
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <p className="text-sm font-medium text-charcoal truncate">{typeLabel}</p>
-          {durationLabel && (
-            <span className="text-xs text-slate-light flex-shrink-0">{durationLabel}</span>
-          )}
-          {workout.target_hr_zones && (
-            <span className="text-xs text-slate-light flex-shrink-0">HR Z{workout.target_hr_zones}</span>
-          )}
+    <div className="grid grid-cols-3 gap-3">
+      {['CTL', 'ATL', 'TSB'].map((metric) => (
+        <div key={metric} className="rounded-xl bg-white border border-cream-dark p-4 text-center opacity-50">
+          <p className="text-lg font-bold text-charcoal">0.0</p>
+          <p className="text-[10px] text-slate uppercase">{metric}</p>
+          <p className="text-[9px] text-slate-light mt-1">Phase 5</p>
         </div>
-        {workout.description && (
-          <p className="text-xs text-slate mt-0.5 leading-relaxed">{workout.description}</p>
-        )}
-      </div>
-      {workout.is_completed === 1 && (
-        <span className="text-xs text-forest font-medium flex-shrink-0">Done</span>
-      )}
+      ))}
     </div>
   );
 }
