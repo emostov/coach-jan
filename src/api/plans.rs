@@ -19,6 +19,13 @@ pub struct GenerateRequest {
     pub race_goal_id: i64,
 }
 
+#[derive(Deserialize)]
+pub struct CompleteWorkoutRequest {
+    pub rpe: Option<i64>,
+    pub athlete_notes: Option<String>,
+    pub actual_duration_min: Option<i64>,
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -70,7 +77,7 @@ async fn generate_plan(
     // Get current CTL
     let ctl = get_current_ctl(&state.db, auth.user_id).await?;
 
-    let skeleton = handlers::generate_skeleton(client, &profile, &race_goal, ctl)
+    let skeleton = handlers::generate_skeleton(client, &state.db, &profile, &race_goal, ctl)
         .await
         .map_err(|e| AppError::Internal(format!("Plan generation failed: {}", e)))?;
 
@@ -117,33 +124,76 @@ async fn confirm_plan(
 
 /// GET /api/plan
 ///
-/// Returns the current active macrocycle with its mesocycles and
-/// the first mesocycle's planned workouts.
+/// Returns the current active macrocycle with all mesocycles and their workouts.
 async fn get_plan(
     state: axum::extract::State<AppState>,
     auth: AuthUser,
 ) -> AppResult<impl IntoResponse> {
-    let plan = plans_db::get_current_plan(&state.db, auth.user_id).await?;
+    let plan = plans_db::get_plan_with_all_workouts(&state.db, auth.user_id).await?;
 
     match plan {
         Some((macrocycle, mesocycles)) => {
-            // Get workouts for the first mesocycle
-            let workouts = if let Some(first_meso) = mesocycles.first() {
-                plans_db::get_planned_workouts(&state.db, first_meso.id).await?
-            } else {
-                vec![]
-            };
-
             Ok(Json(serde_json::json!({
                 "macrocycle": macrocycle,
-                "mesocycles": mesocycles,
-                "workouts": workouts
+                "mesocycles": mesocycles
             })))
         }
         None => Err(AppError::NotFound(
             "No active training plan found".to_string(),
         )),
     }
+}
+
+/// GET /api/plan/workout/:id
+///
+/// Returns a single workout with its mesocycle context.
+async fn get_workout(
+    state: axum::extract::State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(workout_id): axum::extract::Path<i64>,
+) -> AppResult<impl IntoResponse> {
+    let result = plans_db::get_workout_with_context(&state.db, workout_id, auth.user_id).await?;
+
+    match result {
+        Some((workout, mesocycle)) => {
+            Ok(Json(serde_json::json!({
+                "workout": workout,
+                "mesocycle": mesocycle
+            })))
+        }
+        None => Err(AppError::NotFound("Workout not found".to_string())),
+    }
+}
+
+/// POST /api/plan/workouts/:id/complete
+///
+/// Marks a workout as completed with optional feedback (RPE, notes, actual duration).
+async fn complete_workout(
+    state: axum::extract::State<AppState>,
+    auth: AuthUser,
+    axum::extract::Path(workout_id): axum::extract::Path<i64>,
+    Json(body): Json<CompleteWorkoutRequest>,
+) -> AppResult<impl IntoResponse> {
+    // Validate RPE range
+    if let Some(rpe) = body.rpe {
+        if !(1..=10).contains(&rpe) {
+            return Err(AppError::BadRequest(
+                "RPE must be between 1 and 10".to_string(),
+            ));
+        }
+    }
+
+    let workout = plans_db::complete_workout(
+        &state.db,
+        workout_id,
+        auth.user_id,
+        body.rpe,
+        body.athlete_notes.as_deref(),
+        body.actual_duration_min,
+    )
+    .await?;
+
+    Ok(Json(workout))
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +204,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/generate", axum::routing::post(generate_plan))
         .route("/confirm", axum::routing::post(confirm_plan))
+        .route("/workouts/{id}/complete", axum::routing::post(complete_workout))
         .route("/", axum::routing::get(get_plan))
+        .route("/workout/{id}", axum::routing::get(get_workout))
 }
 
 // ---------------------------------------------------------------------------
@@ -267,5 +319,31 @@ mod tests {
     fn test_generate_request_deserializes_correctly() {
         // Verify the route structure is valid
         let _router = router();
+    }
+
+    #[test]
+    fn test_complete_workout_request_deserialization_all_fields() {
+        let json = r#"{"rpe": 7, "athlete_notes": "felt strong", "actual_duration_min": 48}"#;
+        let req: CompleteWorkoutRequest = serde_json::from_str(json).expect("should parse");
+        assert_eq!(req.rpe, Some(7));
+        assert_eq!(req.athlete_notes.as_deref(), Some("felt strong"));
+        assert_eq!(req.actual_duration_min, Some(48));
+    }
+
+    #[test]
+    fn test_complete_workout_request_deserialization_empty() {
+        let json = r#"{}"#;
+        let req: CompleteWorkoutRequest = serde_json::from_str(json).expect("should parse");
+        assert!(req.rpe.is_none());
+        assert!(req.athlete_notes.is_none());
+        assert!(req.actual_duration_min.is_none());
+    }
+
+    #[test]
+    fn test_complete_workout_request_deserialization_partial() {
+        let json = r#"{"rpe": 5}"#;
+        let req: CompleteWorkoutRequest = serde_json::from_str(json).expect("should parse");
+        assert_eq!(req.rpe, Some(5));
+        assert!(req.athlete_notes.is_none());
     }
 }

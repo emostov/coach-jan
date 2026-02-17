@@ -1145,10 +1145,9 @@ async fn full_plan_generation_and_confirm_flow() {
         get_plan_json["mesocycles"].as_array().unwrap().len(),
         2
     );
-    assert_eq!(
-        get_plan_json["workouts"].as_array().unwrap().len(),
-        28
-    );
+    // Workouts are now nested inside each mesocycle
+    let first_meso_workouts = get_plan_json["mesocycles"][0]["workouts"].as_array().unwrap();
+    assert_eq!(first_meso_workouts.len(), 28);
 }
 
 #[tokio::test]
