@@ -179,10 +179,11 @@ mod tests {
 
     #[test]
     fn system_prompt_contains_key_terms() {
-        use crate::ai::prompts::COACH_JAN_SYSTEM_PROMPT;
-        assert!(COACH_JAN_SYSTEM_PROMPT.contains("Olbrecht"));
-        assert!(COACH_JAN_SYSTEM_PROMPT.contains("capacity"));
-        assert!(COACH_JAN_SYSTEM_PROMPT.contains("aerobically limited"));
-        assert!(COACH_JAN_SYSTEM_PROMPT.contains("easy_run"));
+        use crate::ai::prompts::coach_jan_system_prompt;
+        let prompt = coach_jan_system_prompt();
+        assert!(prompt.contains("Olbrecht"));
+        assert!(prompt.contains("capacity"));
+        assert!(prompt.contains("aerobically limited"));
+        assert!(prompt.contains("easy_run"));
     }
 }
